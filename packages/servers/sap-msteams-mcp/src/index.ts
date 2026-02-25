@@ -110,7 +110,7 @@ const tools: Tool[] = [
   },
   {
     name: "teams_web_send",
-    description: "Send a message to a Teams conversation",
+    description: "Send a message to a Teams conversation (creates a new top-level message, not a threaded reply). For threaded replies, use teams_web_reply instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -120,10 +120,37 @@ const tools: Tool[] = [
         },
         message: {
           type: "string",
-          description: "Message text to send (required)",
+          description: "Message content to send (required)",
+        },
+        format: {
+          type: "string",
+          enum: ["text", "html", "markdown"],
+          description: "Message format: 'text' (default, plain text with newline support), 'html' (raw HTML for rich formatting like <b>, <i>, <ul>, etc.), 'markdown' (Teams markdown syntax)",
         },
       },
       required: ["conversationId", "message"],
+    },
+  },
+  {
+    name: "teams_web_reply",
+    description: "Send a threaded reply to a specific message in a Teams channel. The reply will appear under the parent message in the thread.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversationId: {
+          type: "string",
+          description: "Channel/Conversation ID (e.g., 19:xxx@thread.tacv2) (required)",
+        },
+        parentMessageId: {
+          type: "string",
+          description: "ID of the message to reply to (required)",
+        },
+        message: {
+          type: "string",
+          description: "Message text to send as reply (required)",
+        },
+      },
+      required: ["conversationId", "parentMessageId", "message"],
     },
   },
   {
@@ -500,8 +527,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "teams_web_send": {
         const conversationId = getRequiredParam<string>(args, "conversationId");
         const message = getRequiredParam<string>(args, "message");
+        const format = getParam<"text" | "html" | "markdown">(args, "format") ?? "text";
 
-        const result = await apiClient.sendMessage(conversationId, message);
+        const result = await apiClient.sendMessage(conversationId, message, format);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case "teams_web_reply": {
+        const conversationId = getRequiredParam<string>(args, "conversationId");
+        const parentMessageId = getRequiredParam<string>(args, "parentMessageId");
+        const message = getRequiredParam<string>(args, "message");
+
+        const result = await apiClient.sendReply(
+          conversationId,
+          parentMessageId,
+          message,
+        );
         return {
           content: [
             {
