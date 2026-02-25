@@ -1,0 +1,428 @@
+import axios, { AxiosError } from "axios";
+import { CookieStore } from "./cookie-storage.js";
+
+// Custom error for auth redirect detection
+class AuthRedirectError extends Error {
+  constructor(public redirectUrl: string) {
+    super("AUTHENTICATION_REQUIRED");
+    this.name = "AuthRedirectError";
+  }
+}
+
+/**
+ * Pure HTTP Client for Wiki - No Browser Dependencies
+ * Supports both PAT authentication and cookie-based authentication
+ * Designed for non-long-running MCP instances
+ */
+export class PureWikiHttpClient {
+  private httpClient: any;
+  private cookieStore?: CookieStore;
+  private readonly WIKI_DOMAIN: string;
+  private readonly BASE_URL: string;
+  private readonly apiToken?: string;
+  private readonly usePATAuth: boolean;
+
+  constructor(domain?: string, apiToken?: string) {
+    this.WIKI_DOMAIN = domain || "wiki.one.int.sap";
+    this.BASE_URL = `https://${this.WIKI_DOMAIN}`;
+    this.apiToken = apiToken;
+    this.usePATAuth = !!apiToken;
+
+    if (!this.usePATAuth) {
+      this.cookieStore = new CookieStore(this.WIKI_DOMAIN);
+    }
+
+    const headers: any = {
+      accept: "*/*",
+      "accept-language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+      "cache-control": "no-cache, no-store, must-revalidate",
+      dnt: "1",
+      expires: "0",
+      pragma: "no-cache",
+      "sec-fetch-dest": "empty",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-origin",
+      "user-agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    };
+
+    if (this.usePATAuth) {
+      headers["Authorization"] = `Bearer ${this.apiToken}`;
+      console.log(`Using PAT authentication for domain: ${this.WIKI_DOMAIN}`);
+    } else {
+      headers["referer"] = `https://${this.WIKI_DOMAIN}/wiki/`;
+      console.log(
+        `Using cookie-based authentication for domain: ${this.WIKI_DOMAIN}`,
+      );
+    }
+
+    this.httpClient = axios.create({
+      baseURL: this.BASE_URL,
+      timeout: 15000,
+      headers,
+      maxRedirects: 5,
+    });
+
+    // Intercept responses to detect auth redirects
+    this.httpClient.interceptors.response.use(
+      (response: any) => {
+        const finalUrl = response.request?.res?.responseURL || "";
+        if (this.isLoginUrl(finalUrl)) {
+          console.log(`🔒 Auth redirect detected (final URL): ${finalUrl}`);
+          throw new AuthRedirectError(finalUrl);
+        }
+
+        // Check response body for JS-based redirects (small HTML page with redirect script)
+        if (
+          response.status === 200 &&
+          response.data &&
+          typeof response.data === "string"
+        ) {
+          const body = response.data;
+          const isSmallPage = body.length < 5000;
+          const hasJsRedirect =
+            body.includes("window.location.assign") &&
+            body.includes("accounts.sap.com/saml2/idp/sso");
+          if (isSmallPage && hasJsRedirect) {
+            console.log(`🔒 Auth redirect detected (JS redirect in body)`);
+            throw new AuthRedirectError("accounts.sap.com/saml2/idp/sso");
+          }
+        }
+
+        return response;
+      },
+      (error: AxiosError) => {
+        if (
+          error.response &&
+          [301, 302, 303, 307, 308].includes(error.response.status)
+        ) {
+          const location = (error.response.headers as any)?.location || "";
+          if (this.isLoginUrl(location)) {
+            console.log(`🔒 Auth redirect detected (location): ${location}`);
+            throw new AuthRedirectError(location);
+          }
+        }
+        return Promise.reject(error);
+      },
+    );
+  }
+
+  private isLoginUrl(url: string): boolean {
+    if (!url) return false;
+    return (
+      url.includes("login.action") ||
+      url.includes("permissionViolation=true") ||
+      url.includes("accounts.sap.com/saml2/idp/sso")
+    );
+  }
+
+  async initialize(): Promise<{ cookieLoaded: boolean }> {
+    if (this.usePATAuth) {
+      console.log("PAT authentication enabled, skipping cookie loading");
+      return { cookieLoaded: false };
+    }
+    return await this.reloadCookies();
+  }
+
+  async reloadCookies(): Promise<{ cookieLoaded: boolean }> {
+    if (this.usePATAuth) {
+      return { cookieLoaded: false };
+    }
+
+    try {
+      const cookieInfo = await this.cookieStore!.getStorageInfo();
+      if (!cookieInfo.exists) {
+        console.log("No stored cookies found - authentication required");
+        return { cookieLoaded: false };
+      }
+
+      const storedCookies = await this.cookieStore!.loadCookies();
+      if (storedCookies && storedCookies.length > 0) {
+        const cookieString = storedCookies
+          .map((cookie) => `${cookie.name}=${cookie.value}`)
+          .join("; ");
+        this.httpClient.defaults.headers.common["Cookie"] = cookieString;
+        console.log(`Loaded ${storedCookies.length} cookies from storage`);
+        return { cookieLoaded: true };
+      }
+      return { cookieLoaded: false };
+    } catch (error) {
+      console.error("Cookie initialization failed:", error);
+      return { cookieLoaded: false };
+    }
+  }
+
+  async quickAuthTest(): Promise<boolean> {
+    try {
+      const response = await this.httpClient.get("/rest/api/user/current");
+      return response.status === 200;
+    } catch (error: any) {
+      return false;
+    }
+  }
+
+  /**
+   * Execute request with automatic retry on auth failure
+   */
+  private async executeWithRetry<T>(
+    requestFn: () => Promise<T>,
+    context: string,
+  ): Promise<T> {
+    try {
+      return await requestFn();
+    } catch (error: any) {
+      // Handle auth redirect error
+      if (
+        error instanceof AuthRedirectError ||
+        error.message === "AUTHENTICATION_REQUIRED"
+      ) {
+        if (this.usePATAuth) {
+          throw new Error("AUTHENTICATION_REQUIRED");
+        }
+
+        // Try to reload cookies once
+        console.log(
+          `🔄 Auth required for ${context}, trying to reload cookies...`,
+        );
+        const reloadResult = await this.reloadCookies();
+
+        if (reloadResult.cookieLoaded) {
+          console.log(`🔄 Retrying ${context} with reloaded cookies...`);
+          try {
+            return await requestFn();
+          } catch (retryError: any) {
+            if (
+              retryError instanceof AuthRedirectError ||
+              retryError.message === "AUTHENTICATION_REQUIRED"
+            ) {
+              throw new Error("AUTHENTICATION_REQUIRED");
+            }
+            throw retryError;
+          }
+        }
+        throw new Error("AUTHENTICATION_REQUIRED");
+      }
+
+      // Handle 401
+      if (error.response?.status === 401) {
+        if (this.usePATAuth) {
+          throw new Error("AUTHENTICATION_REQUIRED");
+        }
+
+        console.log(`🔄 401 error for ${context}, trying to reload cookies...`);
+        const reloadResult = await this.reloadCookies();
+
+        if (reloadResult.cookieLoaded) {
+          console.log(`🔄 Retrying ${context} with reloaded cookies...`);
+          try {
+            return await requestFn();
+          } catch (retryError: any) {
+            // Fall through
+          }
+        }
+        throw new Error("AUTHENTICATION_REQUIRED");
+      }
+
+      throw error;
+    }
+  }
+
+  async cqlSearch(
+    cqlQuery: string,
+    start: number = 0,
+    limit: number = 20,
+  ): Promise<any> {
+    const encodedCql = encodeURIComponent(cqlQuery);
+    const searchPath = `/rest/api/search?cql=${encodedCql}&start=${start}&limit=${limit}&excerpt=highlight&expand=space.icon&includeArchivedSpaces=false&src=next.ui.search`;
+
+    try {
+      return await this.executeWithRetry(async () => {
+        const response = await this.httpClient.get(searchPath);
+        if (response.status === 200 && response.data) {
+          return response.data;
+        }
+        throw new Error(`HTTP ${response.status}: Unexpected response format`);
+      }, "CQL search");
+    } catch (error: any) {
+      if (error.message === "AUTHENTICATION_REQUIRED") {
+        throw error;
+      }
+      if (error.response?.status === 403) {
+        throw new Error("ACCESS_FORBIDDEN");
+      }
+      if (error.response?.status === 400) {
+        const errorMsg =
+          error.response?.data?.message ||
+          error.response?.data ||
+          "Invalid CQL query syntax";
+        throw new Error(`CQL_SYNTAX_ERROR: ${errorMsg}`);
+      }
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+        throw new Error("NETWORK_ERROR");
+      }
+      throw new Error(
+        `HTTP_ERROR: ${error.response?.status || "Unknown"} - ${error.message}`,
+      );
+    }
+  }
+
+  async searchWiki(
+    searchTerm: string,
+    start: number = 0,
+    limit: number = 20,
+  ): Promise<any> {
+    const cqlQuery = encodeURIComponent(
+      `siteSearch ~ "${searchTerm}" AND type in ("space","user","com.atlassian.confluence.extra.team-calendars:calendar-content-type","attachment","page","com.atlassian.confluence.extra.team-calendars:space-calendars-view-content-type","blogpost")`,
+    );
+    const searchPath = `/rest/api/search?cql=${cqlQuery}&start=${start}&limit=${limit}&excerpt=highlight&expand=space.icon&includeArchivedSpaces=false&src=next.ui.search`;
+
+    try {
+      return await this.executeWithRetry(async () => {
+        const response = await this.httpClient.get(searchPath);
+        if (response.status === 200 && response.data) {
+          return response.data;
+        }
+        throw new Error(`HTTP ${response.status}: Unexpected response format`);
+      }, "wiki search");
+    } catch (error: any) {
+      if (error.message === "AUTHENTICATION_REQUIRED") {
+        throw error;
+      }
+      if (error.response?.status === 403) {
+        throw new Error("ACCESS_FORBIDDEN");
+      }
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+        throw new Error("NETWORK_ERROR");
+      }
+      throw new Error(`HTTP_ERROR: ${error.response?.status || "Unknown"}`);
+    }
+  }
+
+  async fetchWikiContent(url: string, raw: boolean = false): Promise<string> {
+    if (!url.includes(this.WIKI_DOMAIN)) {
+      throw new Error(`Invalid wiki URL domain. Expected: ${this.WIKI_DOMAIN}`);
+    }
+
+    const requestOptions = {
+      headers: {
+        accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "accept-encoding": "gzip, deflate, br",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+        "upgrade-insecure-requests": "1",
+      },
+    };
+
+    try {
+      return await this.executeWithRetry(async () => {
+        const response = await this.httpClient.get(url, requestOptions);
+        if (response.status === 200 && response.data) {
+          return raw ? response.data : this.cleanHtmlContent(response.data);
+        }
+        throw new Error(
+          `HTTP ${response.status}: Failed to fetch page content`,
+        );
+      }, "content fetch");
+    } catch (error: any) {
+      if (error.message === "AUTHENTICATION_REQUIRED") {
+        throw error;
+      }
+      if (error.response?.status === 403) {
+        throw new Error("ACCESS_FORBIDDEN");
+      }
+      if (error.response?.status === 404) {
+        throw new Error("PAGE_NOT_FOUND");
+      }
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+        throw new Error("NETWORK_ERROR");
+      }
+      throw new Error(`CONTENT_FETCH_ERROR: ${error.message}`);
+    }
+  }
+
+  private cleanHtmlContent(html: string): string {
+    try {
+      const mainContentStart = html.indexOf('<div id="main-content"');
+      if (mainContentStart === -1) {
+        console.warn("Warning: div#main-content not found in page");
+        return "Error: Could not find main content section (div#main-content) in the page.";
+      }
+
+      const endMarker = '<div id="likes-and-labels-container"';
+      let endPosition = html.indexOf(endMarker, mainContentStart);
+      if (endPosition === -1) {
+        console.warn(
+          "Warning: div#likes-and-labels-container not found, extracting all main-content",
+        );
+        endPosition = html.length;
+      }
+
+      let content = html.substring(mainContentStart, endPosition);
+
+      // Remove script and style tags
+      content = content.replace(
+        /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+        "",
+      );
+      content = content.replace(
+        /<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi,
+        "",
+      );
+
+      // Convert HTML to text
+      content = content.replace(/<br\s*\/?>/gi, "\n");
+      content = content.replace(
+        /<\/?(div|p|h[1-6]|li|ul|ol|table|tr|td|th)[^>]*>/gi,
+        "\n",
+      );
+      content = content.replace(/<[^>]+>/g, "");
+
+      // Decode HTML entities
+      content = content
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&hellip;/g, "...")
+        .replace(/&ndash;/g, "-")
+        .replace(/&mdash;/g, "—")
+        .replace(/&apos;/g, "'");
+
+      // Clean whitespace
+      content = content
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n[ \t]+/g, "\n")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+      return content;
+    } catch (error) {
+      console.error("HTML cleaning error:", error);
+      return `Error extracting content: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async getCookieStorageInfo(): Promise<any> {
+    if (this.usePATAuth) {
+      return {
+        exists: false,
+        cookieCount: 0,
+        filePath: "N/A (using PAT authentication)",
+      };
+    }
+    return await this.cookieStore!.getStorageInfo();
+  }
+
+  isUsingPATAuth(): boolean {
+    return this.usePATAuth;
+  }
+
+  getWikiDomain(): string {
+    return this.WIKI_DOMAIN;
+  }
+}
