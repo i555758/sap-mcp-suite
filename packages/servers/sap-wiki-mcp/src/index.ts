@@ -31,7 +31,7 @@ if (WIKI_DOMAIN && WIKI_API_TOKEN) {
 const server = new Server(
   {
     name: "sap-wiki-mcp",
-    version: "1.1.1",
+    version: "1.2.0",
   },
   {
     capabilities: {
@@ -84,6 +84,56 @@ const WikiContentSchema = z.object({
     .optional()
     .default(false)
     .describe("Return raw HTML content without cleaning (default: false)"),
+  format: z
+    .enum(["text", "storage"])
+    .optional()
+    .default("text")
+    .describe("Output format: 'text' (default) for readable content, 'storage' for Confluence XML format with version info (needed for editing)"),
+});
+
+// Schema for wiki_update_page tool
+const WikiUpdatePageSchema = z.object({
+  pageId: z
+    .string()
+    .describe("The Confluence page ID to update (e.g., '5825274447')"),
+  content: z
+    .string()
+    .describe("The new page content in Confluence storage format (XML). Must be obtained by first reading the page with format='storage'"),
+  version: z
+    .number()
+    .describe("The current version number of the page (obtained from reading the page with format='storage'). This prevents overwriting concurrent edits."),
+  title: z
+    .string()
+    .optional()
+    .describe("Optional: New title for the page. If not provided, keeps the existing title."),
+  comment: z
+    .string()
+    .optional()
+    .describe("Optional: Version comment describing what was changed (e.g., 'Added new KT recording')"),
+});
+
+// Schema for wiki_create_page tool
+const WikiCreatePageSchema = z.object({
+  spaceKey: z
+    .string()
+    .describe("The space key where the page will be created (e.g., 'BDCCatBR', 'MOB'). You can find the space key in the wiki URL."),
+  title: z
+    .string()
+    .describe("The title of the new page"),
+  content: z
+    .string()
+    .describe("The page content in Confluence storage format (XML). Can be simple HTML-like content or Confluence macros."),
+  parentPageId: z
+    .string()
+    .optional()
+    .describe("Optional: Parent page ID. If provided, creates the page as a child of this page. If not provided, creates at space root level."),
+});
+
+// Schema for wiki_delete_page tool
+const WikiDeletePageSchema = z.object({
+  pageId: z
+    .string()
+    .describe("The Confluence page ID to delete (e.g., '5825274447')"),
 });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -170,8 +220,97 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               "Return raw HTML content without cleaning (default: false)",
             default: false,
           },
+          format: {
+            type: "string",
+            enum: ["text", "storage"],
+            description:
+              "Output format: 'text' (default) for readable content, 'storage' for Confluence XML format with version info (needed for editing)",
+            default: "text",
+          },
         },
         required: ["url"],
+      },
+    },
+    {
+      name: "wiki_update_page",
+      description:
+        "Update a wiki page's content. IMPORTANT: You must first read the page using wiki_content with format='storage' to get the current content and version number. This tool will fail if you haven't read the page first.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: {
+            type: "string",
+            description:
+              "The Confluence page ID to update (e.g., '5825274447')",
+          },
+          content: {
+            type: "string",
+            description:
+              "The new page content in Confluence storage format (XML). Must be obtained by first reading the page with format='storage'",
+          },
+          version: {
+            type: "number",
+            description:
+              "The current version number of the page (obtained from reading the page with format='storage'). This prevents overwriting concurrent edits.",
+          },
+          title: {
+            type: "string",
+            description:
+              "Optional: New title for the page. If not provided, keeps the existing title.",
+          },
+          comment: {
+            type: "string",
+            description:
+              "Optional: Version comment describing what was changed (e.g., 'Added new KT recording')",
+          },
+        },
+        required: ["pageId", "content", "version"],
+      },
+    },
+    {
+      name: "wiki_create_page",
+      description:
+        "Create a new wiki page in a specified space. You can optionally specify a parent page to create it as a child page.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          spaceKey: {
+            type: "string",
+            description:
+              "The space key where the page will be created (e.g., 'BDCCatBR', 'MOB'). You can find the space key in the wiki URL.",
+          },
+          title: {
+            type: "string",
+            description: "The title of the new page",
+          },
+          content: {
+            type: "string",
+            description:
+              "The page content in Confluence storage format (XML). Can be simple HTML-like content or Confluence macros.",
+          },
+          parentPageId: {
+            type: "string",
+            description:
+              "Optional: Parent page ID. If provided, creates the page as a child of this page. If not provided, creates at space root level.",
+          },
+        },
+        required: ["spaceKey", "title", "content"],
+      },
+    },
+    {
+      name: "wiki_delete_page",
+      description:
+        "Delete a wiki page. WARNING: This action is irreversible. The page and all its content will be permanently deleted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pageId: {
+            type: "string",
+            description:
+              "The Confluence page ID to delete (e.g., '5825274447')",
+          },
+        },
+        required: ["pageId"],
       },
     },
   ];
@@ -526,9 +665,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   if (name === "wiki_content") {
     try {
-      const { url, raw = false } = WikiContentSchema.parse(args);
+      const { url, raw = false, format = "text" } = WikiContentSchema.parse(args);
 
-      console.error(`📄 Fetching wiki content from: ${url} (raw: ${raw})`);
+      console.error(`📄 Fetching wiki content from: ${url} (raw: ${raw}, format: ${format})`);
 
       const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
       await httpClient.initialize();
@@ -548,6 +687,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const startTime = Date.now();
+
+      // Handle storage format - use REST API to get Confluence storage XML
+      if (format === "storage") {
+        // Extract pageId from URL
+        const pageIdMatch = url.match(/pageId=(\d+)/);
+        if (!pageIdMatch) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "INVALID_URL: Could not extract pageId from URL. URL must contain pageId parameter (e.g., ?pageId=123456)",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const pageId = pageIdMatch[1];
+
+        const storageData = await httpClient.getPageStorageFormat(pageId);
+        const endTime = Date.now();
+        console.error(`✅ Storage format fetched in ${endTime - startTime}ms`);
+
+        // Return structured data for editing
+        const output = `Page ID: ${storageData.pageId}
+Title: ${storageData.title}
+Space: ${storageData.spaceKey}
+Version: ${storageData.version}
+
+--- STORAGE FORMAT CONTENT (use this for wiki_update_page) ---
+${storageData.content}`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: output,
+            },
+          ],
+        };
+      }
+
+      // Default: text format
       const pageContent = await httpClient.fetchWikiContent(url, raw);
       const endTime = Date.now();
 
@@ -620,6 +801,403 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             type: "text",
             text: `CONTENT_FETCH_ERROR: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  if (name === "wiki_update_page") {
+    try {
+      const { pageId, content, version, title, comment } = WikiUpdatePageSchema.parse(args);
+
+      console.error(`📝 Updating wiki page: ${pageId} (version: ${version})`);
+
+      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
+      await httpClient.initialize();
+
+      const startTime = Date.now();
+      const result = await httpClient.updatePageContent(
+        pageId,
+        content,
+        version,
+        title,
+        comment
+      );
+      const endTime = Date.now();
+
+      console.error(`✅ Page updated in ${endTime - startTime}ms (new version: ${result.newVersion})`);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `✅ Page updated successfully!
+
+Page ID: ${result.pageId}
+Title: ${result.title}
+New Version: ${result.newVersion}
+URL: ${result.url}`,
+          },
+        ],
+      };
+    } catch (error) {
+      console.error("❌ Wiki update error:", error);
+
+      if (error instanceof Error) {
+        if (error.message === "AUTHENTICATION_REQUIRED") {
+          // For PAT authentication, return clear error message
+          if (WIKI_API_TOKEN) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          // For cookie-based auth, return structured error for sap-auth-mcp
+          const httpClient = new PureWikiHttpClient(
+            WIKI_DOMAIN,
+            WIKI_API_TOKEN,
+          );
+          await httpClient.initialize();
+          const storageInfo = await httpClient.getCookieStorageInfo();
+
+          // Extract directory path from file path
+          const storePath = storageInfo.filePath.substring(
+            0,
+            storageInfo.filePath.lastIndexOf("/"),
+          );
+
+          const structuredError = {
+            error: "SAP_AUTH_REQUIRED",
+            details:
+              "Need call SAP auth MCP to prepare cookie and redo function after.",
+            data: {
+              store_path: storePath,
+              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
+            },
+          };
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(structuredError, null, 2),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Handle specific update errors
+        if (error.message.includes("VERSION_CONFLICT")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "VERSION_CONFLICT: The page has been modified by someone else. Please re-read the page with format='storage' to get the latest version and try again.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (error.message.includes("ACCESS_FORBIDDEN")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "ACCESS_FORBIDDEN: You don't have permission to edit this page.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (error.message.includes("INVALID_CONTENT")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `INVALID_CONTENT: ${error.message}. Make sure the content is valid Confluence storage format.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `UPDATE_ERROR: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  if (name === "wiki_create_page") {
+    try {
+      const { spaceKey, title, content, parentPageId } = WikiCreatePageSchema.parse(args);
+
+      console.error(`📝 Creating wiki page: "${title}" in space ${spaceKey}${parentPageId ? ` (parent: ${parentPageId})` : ''}`);
+
+      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
+      await httpClient.initialize();
+
+      const startTime = Date.now();
+      const result = await httpClient.createPage(spaceKey, title, content, parentPageId);
+      const endTime = Date.now();
+
+      console.error(`✅ Page created in ${endTime - startTime}ms (pageId: ${result.pageId})`);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `✅ Page created successfully!
+
+Page ID: ${result.pageId}
+Title: ${result.title}
+Space: ${result.spaceKey}
+Version: ${result.version}
+URL: ${result.url}`,
+          },
+        ],
+      };
+    } catch (error) {
+      console.error("❌ Wiki create page error:", error);
+
+      if (error instanceof Error) {
+        if (error.message === "AUTHENTICATION_REQUIRED") {
+          // For PAT authentication, return clear error message
+          if (WIKI_API_TOKEN) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          // For cookie-based auth, return structured error for sap-auth-mcp
+          const httpClient = new PureWikiHttpClient(
+            WIKI_DOMAIN,
+            WIKI_API_TOKEN,
+          );
+          await httpClient.initialize();
+          const storageInfo = await httpClient.getCookieStorageInfo();
+
+          // Extract directory path from file path
+          const storePath = storageInfo.filePath.substring(
+            0,
+            storageInfo.filePath.lastIndexOf("/"),
+          );
+
+          const structuredError = {
+            error: "SAP_AUTH_REQUIRED",
+            details:
+              "Need call SAP auth MCP to prepare cookie and redo function after.",
+            data: {
+              store_path: storePath,
+              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
+            },
+          };
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(structuredError, null, 2),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Handle specific create errors
+        if (error.message.includes("DUPLICATE_TITLE")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: error.message,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (error.message.includes("ACCESS_FORBIDDEN")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "ACCESS_FORBIDDEN: You don't have permission to create pages in this space.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (error.message.includes("SPACE_NOT_FOUND")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: error.message,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (error.message.includes("INVALID_REQUEST")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${error.message}. Make sure the content is valid Confluence storage format.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `CREATE_PAGE_ERROR: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  if (name === "wiki_delete_page") {
+    try {
+      const { pageId } = WikiDeletePageSchema.parse(args);
+
+      console.error(`🗑️ Deleting wiki page: ${pageId}`);
+
+      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
+      await httpClient.initialize();
+
+      const startTime = Date.now();
+      const result = await httpClient.deletePage(pageId);
+      const endTime = Date.now();
+
+      console.error(`✅ Page deleted in ${endTime - startTime}ms`);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `✅ Page deleted successfully!
+
+Page ID: ${result.pageId}`,
+          },
+        ],
+      };
+    } catch (error) {
+      console.error("❌ Wiki delete page error:", error);
+
+      if (error instanceof Error) {
+        if (error.message === "AUTHENTICATION_REQUIRED") {
+          // For PAT authentication, return clear error message
+          if (WIKI_API_TOKEN) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          // For cookie-based auth, return structured error for sap-auth-mcp
+          const httpClient = new PureWikiHttpClient(
+            WIKI_DOMAIN,
+            WIKI_API_TOKEN,
+          );
+          await httpClient.initialize();
+          const storageInfo = await httpClient.getCookieStorageInfo();
+
+          // Extract directory path from file path
+          const storePath = storageInfo.filePath.substring(
+            0,
+            storageInfo.filePath.lastIndexOf("/"),
+          );
+
+          const structuredError = {
+            error: "SAP_AUTH_REQUIRED",
+            details:
+              "Need call SAP auth MCP to prepare cookie and redo function after.",
+            data: {
+              store_path: storePath,
+              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
+            },
+          };
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(structuredError, null, 2),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Handle specific delete errors
+        if (error.message.includes("PAGE_NOT_FOUND")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: error.message,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (error.message.includes("ACCESS_FORBIDDEN")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "ACCESS_FORBIDDEN: You don't have permission to delete this page.",
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `DELETE_PAGE_ERROR: ${error instanceof Error ? error.message : String(error)}`,
           },
         ],
         isError: true,

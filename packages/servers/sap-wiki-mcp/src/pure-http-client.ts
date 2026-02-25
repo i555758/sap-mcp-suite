@@ -425,4 +425,252 @@ export class PureWikiHttpClient {
   getWikiDomain(): string {
     return this.WIKI_DOMAIN;
   }
+
+  /**
+   * Get page content in storage format (for editing)
+   * Returns the Confluence storage XML, version number, and page metadata
+   */
+  async getPageStorageFormat(pageId: string): Promise<{
+    pageId: string;
+    title: string;
+    version: number;
+    content: string;
+    spaceKey: string;
+  }> {
+    const apiPath = `/wiki/rest/api/content/${pageId}?expand=body.storage,version,space`;
+
+    try {
+      return await this.executeWithRetry(async () => {
+        const response = await this.httpClient.get(apiPath);
+        if (response.status === 200 && response.data) {
+          const data = response.data;
+          return {
+            pageId: data.id,
+            title: data.title,
+            version: data.version.number,
+            content: data.body.storage.value,
+            spaceKey: data.space?.key || '',
+          };
+        }
+        throw new Error(`HTTP ${response.status}: Unexpected response format`);
+      }, "get page storage format");
+    } catch (error: any) {
+      if (error.message === "AUTHENTICATION_REQUIRED") {
+        throw error;
+      }
+      if (error.response?.status === 404) {
+        throw new Error("PAGE_NOT_FOUND");
+      }
+      if (error.response?.status === 403) {
+        throw new Error("ACCESS_FORBIDDEN");
+      }
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+        throw new Error("NETWORK_ERROR");
+      }
+      throw new Error(`GET_PAGE_ERROR: ${error.message}`);
+    }
+  }
+
+  /**
+   * Update page content
+   * Requires the current version number to prevent conflicts
+   */
+  async updatePageContent(
+    pageId: string,
+    content: string,
+    currentVersion: number,
+    title?: string,
+    comment?: string
+  ): Promise<{
+    pageId: string;
+    title: string;
+    newVersion: number;
+    url: string;
+  }> {
+    const apiPath = `/wiki/rest/api/content/${pageId}`;
+
+    // First get the current page to get title if not provided
+    let pageTitle = title;
+    if (!pageTitle) {
+      const currentPage = await this.getPageStorageFormat(pageId);
+      pageTitle = currentPage.title;
+    }
+
+    const payload: any = {
+      id: pageId,
+      type: "page",
+      title: pageTitle,
+      version: {
+        number: currentVersion + 1,
+        message: comment || "",
+      },
+      body: {
+        storage: {
+          value: content,
+          representation: "storage",
+        },
+      },
+    };
+
+    try {
+      return await this.executeWithRetry(async () => {
+        const response = await this.httpClient.put(apiPath, payload, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+        if (response.status === 200 && response.data) {
+          const data = response.data;
+          return {
+            pageId: data.id,
+            title: data.title,
+            newVersion: data.version.number,
+            url: `https://${this.WIKI_DOMAIN}${data._links?.webui || `/wiki/pages/viewpage.action?pageId=${pageId}`}`,
+          };
+        }
+        throw new Error(`HTTP ${response.status}: Unexpected response format`);
+      }, "update page content");
+    } catch (error: any) {
+      if (error.message === "AUTHENTICATION_REQUIRED") {
+        throw error;
+      }
+      if (error.response?.status === 404) {
+        throw new Error("PAGE_NOT_FOUND");
+      }
+      if (error.response?.status === 403) {
+        throw new Error("ACCESS_FORBIDDEN: You don't have permission to edit this page");
+      }
+      if (error.response?.status === 409) {
+        throw new Error("VERSION_CONFLICT: The page has been modified. Please re-read the page and try again.");
+      }
+      if (error.response?.status === 400) {
+        const errorMsg = error.response?.data?.message || "Invalid content format";
+        throw new Error(`INVALID_CONTENT: ${errorMsg}`);
+      }
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+        throw new Error("NETWORK_ERROR");
+      }
+      throw new Error(`UPDATE_PAGE_ERROR: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create a new wiki page
+   * @param spaceKey - The space key where the page will be created (e.g., 'BDCCatBR')
+   * @param title - The title of the new page
+   * @param content - The page content in Confluence storage format (XML)
+   * @param parentPageId - Optional parent page ID. If provided, creates the page as a child of this page
+   */
+  async createPage(
+    spaceKey: string,
+    title: string,
+    content: string,
+    parentPageId?: string
+  ): Promise<{
+    pageId: string;
+    title: string;
+    version: number;
+    url: string;
+    spaceKey: string;
+  }> {
+    const apiPath = `/wiki/rest/api/content`;
+
+    const payload: any = {
+      type: "page",
+      title: title,
+      space: {
+        key: spaceKey,
+      },
+      body: {
+        storage: {
+          value: content,
+          representation: "storage",
+        },
+      },
+    };
+
+    // Add parent page (ancestors) if provided
+    if (parentPageId) {
+      payload.ancestors = [{ id: parentPageId }];
+    }
+
+    try {
+      return await this.executeWithRetry(async () => {
+        const response = await this.httpClient.post(apiPath, payload, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+        if (response.status === 200 || response.status === 201) {
+          const data = response.data;
+          return {
+            pageId: data.id,
+            title: data.title,
+            version: data.version?.number || 1,
+            url: `https://${this.WIKI_DOMAIN}${data._links?.webui || `/wiki/pages/viewpage.action?pageId=${data.id}`}`,
+            spaceKey: data.space?.key || spaceKey,
+          };
+        }
+        throw new Error(`HTTP ${response.status}: Unexpected response format`);
+      }, "create page");
+    } catch (error: any) {
+      if (error.message === "AUTHENTICATION_REQUIRED") {
+        throw error;
+      }
+      if (error.response?.status === 403) {
+        throw new Error("ACCESS_FORBIDDEN: You don't have permission to create pages in this space");
+      }
+      if (error.response?.status === 400) {
+        const errorMsg = error.response?.data?.message || "Invalid request";
+        // Check for duplicate title error
+        if (errorMsg.includes("A page with this title already exists")) {
+          throw new Error(`DUPLICATE_TITLE: A page with the title "${title}" already exists in this space`);
+        }
+        throw new Error(`INVALID_REQUEST: ${errorMsg}`);
+      }
+      if (error.response?.status === 404) {
+        throw new Error(`SPACE_NOT_FOUND: Space "${spaceKey}" does not exist or you don't have access to it`);
+      }
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+        throw new Error("NETWORK_ERROR");
+      }
+      throw new Error(`CREATE_PAGE_ERROR: ${error.message}`);
+    }
+  }
+
+  /**
+   * Delete a wiki page
+   * @param pageId - The page ID to delete
+   */
+  async deletePage(pageId: string): Promise<{ success: boolean; pageId: string }> {
+    const apiPath = `/wiki/rest/api/content/${pageId}`;
+
+    try {
+      return await this.executeWithRetry(async () => {
+        const response = await this.httpClient.delete(apiPath);
+        // 204 No Content is the success response for DELETE
+        if (response.status === 204 || response.status === 200) {
+          return {
+            success: true,
+            pageId: pageId,
+          };
+        }
+        throw new Error(`HTTP ${response.status}: Unexpected response`);
+      }, "delete page");
+    } catch (error: any) {
+      if (error.message === "AUTHENTICATION_REQUIRED") {
+        throw error;
+      }
+      if (error.response?.status === 403) {
+        throw new Error("ACCESS_FORBIDDEN: You don't have permission to delete this page");
+      }
+      if (error.response?.status === 404) {
+        throw new Error(`PAGE_NOT_FOUND: Page "${pageId}" does not exist`);
+      }
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+        throw new Error("NETWORK_ERROR");
+      }
+      throw new Error(`DELETE_PAGE_ERROR: ${error.message}`);
+    }
+  }
 }
