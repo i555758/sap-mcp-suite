@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Auth files (sensitive)
+sap_cookies.json
+sap_tokens.json
+teams_session.json
+
+# Package lock (optional, uncomment if not needed)
+# package-lock.json
