@@ -5,10 +5,16 @@
   "description": "SAP MCP servers monorepo",
   "workspaces": [
     "packages/shared/*",
-    "packages/servers/*"
+    "packages/servers/mcp-github",
+    "packages/servers/sap-auth-mcp",
+    "packages/servers/sap-jira-mcp",
+    "packages/servers/sap-msteams-mcp",
+    "packages/servers/sap-wiki-mcp"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "build:servers": "npm run build --workspace=packages/servers/*"
+    "install:all": "npm install && cd packages/servers/playwright-mcp && npm install",
+    "build:all": "npm run build && cd packages/servers/playwright-mcp && npm run build",
+    "build:playwright": "cd packages/servers/playwright-mcp && npm install && npm run build"
   }
 }
