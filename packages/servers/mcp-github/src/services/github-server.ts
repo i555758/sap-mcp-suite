@@ -123,6 +123,39 @@ export class GitHubServer {
       }
     );
 
+    // Get Repository Tool
+    this.server.registerTool(
+      "get_repository",
+      {
+        title: "Get Repository",
+        description: "Get details of a specific repository including description, default branch, visibility, and more",
+        inputSchema: {
+          owner: z.string().describe("Repository owner"),
+          repo: z.string().describe("Repository name")
+        }
+      },
+      async (args: any) => {
+        await this.initializeServices();
+
+        if (!this.apiService || !this.formatterService) {
+          throw new Error("Services not initialized");
+        }
+
+        const repository = await this.apiService.getRepository({
+          owner: args.owner,
+          repo: args.repo
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: this.formatterService.formatRepository(repository),
+            },
+          ],
+        };
+      }
+    );
+
     // Create Issue Tool
     this.server.registerTool(
       "create_issue",

@@ -61,15 +61,21 @@ export class GitHubApiService {
     per_page?: number;
     page?: number;
   } = {}): Promise<GitHubRepository[]> {
-    const params = {
-      visibility: args.visibility || 'all',
-      affiliation: args.affiliation || 'owner,collaborator,organization_member',
-      type: args.type || 'all',
+    // GitHub API: 'type' cannot be used with 'visibility' or 'affiliation'
+    // If type is provided, use only type; otherwise use visibility/affiliation
+    const params: Record<string, any> = {
       sort: args.sort || 'updated',
       direction: args.direction || 'desc',
       per_page: args.per_page || 30,
       page: args.page || 1
     };
+
+    if (args.type) {
+      params.type = args.type;
+    } else {
+      if (args.visibility) params.visibility = args.visibility;
+      if (args.affiliation) params.affiliation = args.affiliation;
+    }
 
     const response: AxiosResponse<GitHubRepository[]> = await this.client.get('/user/repos', { params });
     return response.data;
