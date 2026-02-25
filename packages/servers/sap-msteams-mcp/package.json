@@ -1,0 +1,53 @@
+{
+  "name": "sap-msteams-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Microsoft Teams access via SAP SSO authentication",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "sap-msteams-mcp": "./bin/sap-msteams-mcp.js"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "src/",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "prepack": "npm run build",
+    "start": "node dist/index.js",
+    "dev": "npm run build && node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "microsoft-teams",
+    "sap",
+    "sso",
+    "teams"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.tools.sap/sfsfmcp/sap-msteams-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.tools.sap/sfsfmcp/sap-msteams-mcp/issues"
+  },
+  "homepage": "https://github.tools.sap/sfsfmcp/sap-msteams-mcp#readme",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "volta": {
+    "node": "20.19.5"
+  }
+}
