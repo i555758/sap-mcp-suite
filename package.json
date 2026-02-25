@@ -1,0 +1,14 @@
+{
+  "name": "sap-mcp-suite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SAP MCP servers monorepo",
+  "workspaces": [
+    "packages/shared/*",
+    "packages/servers/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "build:servers": "npm run build --workspace=packages/servers/*"
+  }
+}
