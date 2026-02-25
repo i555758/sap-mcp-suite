@@ -1,0 +1,149 @@
+[
+  {
+    "projectKey": "MOB",
+    "fieldMappings": {
+      "Test Type": "customfield_10240",
+      "Automation Type": "customfield_44240",
+      "Test Execution Type": "customfield_22442",
+      "Test Path": "customfield_22453",
+      "Epic Name": "customfield_15141",
+      "Git Path":"customfield_44241",
+      "Epic Link":"customfield_15140",
+      "Mobile Required":"customfield_44041",
+      "UI Required":"customfield_43773",
+      "Stack":"customfield_43758",
+      "Sprint":"customfield_12740",
+      "Story Points":"customfield_10013",
+      "Version / Delivery":"fixVersions",
+      "Affects Version/s":"versions",
+      "Security Review":"customfield_43742",
+      "QA Contact":"customfield_43743",
+      "Labels":"labels"
+    },
+    "create_issue_template": [
+    {
+      "type": "Test",
+      "summary": "",
+      "description": "",
+      "issuetype": {"id": "11902"},
+      "assignee": "I530424",
+      "labels": ["CT-automation-test-cases"],
+      "components": [{"name": "Org-Chart"}],
+      "priority": {"name": "Medium"},
+      "customfield_10240": {"value": "Functional Integration"},
+      "customfield_44240": {
+        "value": "Mobile",
+        "child": {"value": "CT-Component"}
+      },
+      "customfield_43758": [{"value": "Mobile Client(Android)"}],
+      "customfield_22442": {"value": "Manual"},
+      "customfield_22453": "/SHG - Blue/Android/CT/Org Chart",
+      "customfield_44241": ""
+    },
+    {
+      "type": "Epic",
+      "summary": "Your Epic Summary/Title",
+      "description": "Detailed description of the Epic",
+      "issuetype": {"id": "7"},
+      "customfield_15141": "Epic Name",
+      "components": [{"name": "Deeplink"}],
+      "customfield_44041": {"value": "Yes"},
+      "customfield_43773": {"value": "Yes"},
+      "assignee": "I530424"
+    },
+    {
+      "type": "Story",
+      "summary": "Your Story Summary/Title",
+      "description": "Detailed description of the Story",
+      "issuetype": {"id": "10500"},
+      "assignee": "I530424",
+      "components": [{"name": "Deeplink"}],
+      "priority": {"name": "Medium"},
+      "customfield_43758": [{"value": "Mobile Client(Android)"}],
+      "customfield_15140":"",
+      "fixVersions": [{"name": "mobTrain-2509"}],
+      "versions": [{"name": "mobTrain-2509"}]
+    },
+    {
+      "type": "Activity",
+      "summary": "Your Activity Summary/Title",
+      "description": "Detailed description of the Activity",
+      "issuetype": {"id": "12"},
+      "assignee": "I530424",
+      "priority": {"name": "Medium"},
+      "customfield_43758": [{"value": "Mobile Client(Android)"}],
+      "customfield_15140":"",
+      "fixVersions": [{"name": "mobTrain-2509"}],
+      "versions": [{"name": "mobTrain-2509"}]
+    },  
+    {
+      "type": "Sub-Task",
+      "summary": "Android cT test cases running based on API-35 emulator",
+      "description": "Currently, Android instrument test Jenkins job run test cases based on +API - 30+ ATD. Since upgrade to Android - 16, the minSdkVersion will be upgraded to 31. Hence, we have to move to a higher & more stable API version to run instrument tests. Finally we decide to choose +API - 35+ emulator for Jenkins job.\n\nPlease follow the guide to create +API - 35+ emulator & ATD on yourself's laptop,\n[https://wiki.one.int.sap/wiki/display/SFENG8/Create+emulator+for+Android+InstrumentTest],\n\nthen run all android Instrument tests of your feature and ensure *all* test cases {*}passed on both emulator & ATD{*}.\n\n*If there are failed test cases, and your fix codes only impact on your feature itself, then the codes can be merged to develop branch directly. If NOT, please contact [~I523714]* \n\n*Please complete this task before release/2507 cut branch.*\n\nIf you are NOT familiar with Android Instrument test, please read the document firstly, [https://wiki.one.int.sap/wiki/display/SFENG8/Android+InstrumentTest]",
+      "assignee": "I530424",
+      "issuetype": {"id": "10401"},
+      "components": [{"name": "Android Technology"}],
+      "parent":{"key":"MOB-98935"}
+    },
+    {
+      "type": "Bug",
+      "summary": "",
+      "description": "*current behavior:*\n\n\n*expected behavior:*\n\n\n*steps to reproduce:*\n1. \n2. \n3. \n\n*environment:*\ninstance: \nuser: \ndevice: ",
+      "issuetype": {"id": "1"},
+      "assignee": "I530424",
+      "components": [{"name": ""}],
+      "priority": {"name": "Medium"},
+      "versions": [{"name": "2H2025.11 (2509 SD68 Only)"}],
+      "customfield_21441": {"value": "No customer impact"},
+      "customfield_25541": {"value": "Medium"},
+      "customfield_43740": {"value": ""},
+      "customfield_10847": {"value": "New"},
+      "customfield_43758": [{"value": "Mobile Client(Android)"}],
+      "customfield_43867": {"value": "No"},
+      "labels": [""]
+    }
+   ]
+  },
+  {
+    "projectKey": "WRK",
+    "fieldMappings": {
+      "Test Type": "customfield_10240",
+      "Automation Type": "customfield_44240",
+      "Test Execution Type": "customfield_22442",
+      "Test Path": "customfield_22453",
+      "Epic Name": "customfield_15141",
+      "Git Path":"customfield_44241",
+      "Epic Link":"customfield_15140",
+      "Mobile Required":"customfield_44041",
+      "UI Required":"customfield_43773",
+      "Stack":"customfield_43758",
+      "Sprint":"customfield_12740",
+      "Story Points":"customfield_10013",
+      "Version / Delivery":"fixVersions",
+      "Affects Version/s":"versions",
+      "Security Review":"customfield_43742",
+      "QA Contact":"customfield_43743",
+      "Labels":"labels"
+    },
+     "create_issue_template": [
+       {
+       "type": "Test",
+       "summary": "",
+       "description": "",
+       "issuetype": {"id": "11902"},
+       "assignee": "I530424",
+       "labels": ["WRK"],
+       "components": [{"name": "SF Teams - General"}],
+       "priority": {"name": "Low"},
+       "customfield_10240": {"value": "End to End Tests (E2E)"},
+       "customfield_44240": {
+         "value": "ADFv2",
+         "child": {"value": "UI"}
+       },
+       "customfield_22442": {"value": "Cucumber"},
+       "customfield_22453": "/au-worktech",
+       "Git Path": ""
+       }
+     ]
+   }
+]
