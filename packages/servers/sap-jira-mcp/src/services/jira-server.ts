@@ -978,8 +978,13 @@ export class JiraServer {
    * Set up all tools using the new registerTool method
    */
   private setupTools(): void {
-    // Create Issue Tool - define schema shape for passthrough support
-    const createIssueSchema = {
+    // Create Issue Tool
+    const createIssueTool = this.server.registerTool(
+      "create_issue",
+      {
+        title: "Create Issue",
+        description: "Create a new Jira issue",
+        inputSchema: {
           summary: z.string().describe("Issue summary/title"),
           description: z.string().optional().describe("Issue description"),
           type: z
@@ -1090,14 +1095,7 @@ export class JiraServer {
             .describe(
               "Sprint - Field for Sprint using field ID (e.g., sprint name or sprint ID)",
             ),
-        };
-
-    const createIssueTool = this.server.registerTool(
-      "create_issue",
-      {
-        title: "Create Issue",
-        description: "Create a new Jira issue",
-        inputSchema: z.object(createIssueSchema).passthrough(),
+        },
       },
       async (args) => {
         await this.initializeServices();
@@ -1344,6 +1342,14 @@ export class JiraServer {
       },
     );
 
+    // Override the inputSchema to accept any additional fields (passthrough for customfields)
+    if (createIssueTool.inputSchema) {
+      // @ts-ignore - We need to override the SDK's strict schema
+      createIssueTool.inputSchema = z
+        .object(createIssueTool.inputSchema.shape)
+        .passthrough();
+    }
+
     // Search Issues Tool
     this.server.registerTool(
       "search_issues",
@@ -1464,8 +1470,13 @@ export class JiraServer {
       },
     );
 
-    // Update Issue Tool - define schema shape for passthrough support
-    const updateIssueSchema = {
+    // Update Issue Tool
+    const updateIssueTool = this.server.registerTool(
+      "update_issue",
+      {
+        title: "Update Issue",
+        description: "Update an existing issue",
+        inputSchema: {
           issue_key: z.string().describe("Issue key (e.g., PRJ-123)"),
           summary: z.string().optional().describe("New summary/title"),
           description: z.string().optional().describe("New description"),
@@ -1564,14 +1575,7 @@ export class JiraServer {
             .describe(
               "Sprint - Field for Sprint using field ID (e.g., sprint name or sprint ID)",
             ),
-        };
-
-    const updateIssueTool = this.server.registerTool(
-      "update_issue",
-      {
-        title: "Update Issue",
-        description: "Update an existing issue",
-        inputSchema: z.object(updateIssueSchema).passthrough(),
+        },
       },
       async (args) => {
         await this.initializeServices();
@@ -1591,6 +1595,14 @@ export class JiraServer {
         };
       },
     );
+
+    // Override the inputSchema to accept any additional fields (passthrough for customfields)
+    if (updateIssueTool.inputSchema) {
+      // @ts-ignore - We need to override the SDK's strict schema
+      updateIssueTool.inputSchema = z
+        .object(updateIssueTool.inputSchema.shape)
+        .passthrough();
+    }
 
     // Get Issue Tool
     this.server.registerTool(
