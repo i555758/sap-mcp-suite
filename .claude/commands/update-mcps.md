@@ -16,47 +16,66 @@ If "WRONG_DIR", STOP and tell the user to run from the sap-mcp-suite directory.
 
 ---
 
-## Step 2: Check Git Status
+## Step 2: Check for Remote Updates
 
-Check for uncommitted changes that might conflict:
+Fetch from remote and check if there are any incoming changes:
+
+```bash
+git fetch origin
+git rev-list HEAD..origin/main --count
+```
+
+If the count is 0, there are no updates available. Skip to Step 6 with "Already up to date" message.
+
+If there are updates, show what's coming:
+
+```bash
+git log HEAD..origin/main --oneline
+```
+
+---
+
+## Step 3: Check Local Changes and Predict Conflicts
+
+Check for uncommitted local changes:
 
 ```bash
 git status --porcelain
 ```
 
-If there are uncommitted changes, warn the user and ask if they want to continue (changes might be overwritten or cause conflicts).
-
----
-
-## Step 3: Fetch and Pull Latest Changes
+If there are local changes, check if they would conflict with incoming changes:
 
 ```bash
-git fetch origin && git pull origin main
+git diff --name-only HEAD..origin/main
 ```
 
-Show the user what changed (if anything). If there are merge conflicts, STOP and tell the user to resolve them manually.
+Compare the two lists:
+- If any files appear in BOTH lists (local changes AND incoming changes), warn about potential conflicts and ask the user how to proceed (stash, commit, or abort)
+- If local changes don't overlap with incoming changes, proceed safely
 
 ---
 
-## Step 4: Rebuild All MCP Servers
+## Step 4: Pull Changes
+
+```bash
+git pull origin main
+```
+
+If merge conflicts occur, STOP and tell the user to resolve them manually.
+
+---
+
+## Step 5: Rebuild and Check for New Servers
+
+Rebuild all servers:
 
 ```bash
 npm run install:all && npm run build:all
 ```
 
-If build fails, try to fix and if unsure show the error and STOP.
+If build fails, show the error and STOP.
 
----
-
-## Step 5: Detect New MCP Servers
-
-Check which MCP servers exist in the repo:
-
-```bash
-ls -d packages/servers/*/dist/index.js packages/servers/mcp-github/build/index.js packages/servers/playwright-mcp/packages/playwright-mcp/index.js 2>/dev/null
-```
-
-Read the user's `~/.claude.json` and check `mcpServers` to see which ones are already configured.
+Check for new MCP servers not yet configured in `~/.claude.json`:
 
 Known MCP server mappings (repo folder -> config key):
 - `sap-auth-mcp` -> `sap-auth-mcp`
@@ -66,25 +85,34 @@ Known MCP server mappings (repo folder -> config key):
 - `mcp-github` -> `github-tools` and `github-wdf`
 - `playwright-mcp` -> `playwright`
 
-If any new MCP servers are detected that aren't in the user's config:
-1. List the new servers
-2. Tell the user to run `/install-mcps` to configure them (they may need to provide tokens/credentials)
-
 ---
 
 ## Step 6: Complete
 
-If no new servers detected:
+**If no updates available (already up to date):**
+
+```
+============================================================
+              SAP MCP Servers Already Up to Date
+============================================================
+
+No updates available from remote.
+
+Your MCP servers are already running the latest version.
+============================================================
+```
+
+STOP here. No restart needed.
+
+**If updates were pulled:**
 
 ```
 ============================================================
            SAP MCP Servers Updated Successfully!
 ============================================================
 
-All MCP servers have been updated and rebuilt.
-
-Changes pulled from remote:
-  [show git log --oneline -5 or "No new commits"]
+Changes pulled:
+  [show the commits that were pulled]
 
 NEXT STEPS:
 
@@ -97,28 +125,14 @@ NEXT STEPS:
 ============================================================
 ```
 
-If new servers detected:
+**If new servers were detected:**
+
+Add to the message:
 
 ```
-============================================================
-           SAP MCP Servers Updated Successfully!
-============================================================
-
-All MCP servers have been updated and rebuilt.
-
 NEW MCP SERVERS DETECTED:
   - [list new servers]
 
 To configure the new servers, run:
   /install-mcps
-
-NEXT STEPS:
-
-  1. Exit Claude Code:
-     /exit
-
-  2. Resume to use the updated servers:
-     claude -c
-
-============================================================
 ```
