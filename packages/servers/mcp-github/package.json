@@ -20,9 +20,9 @@
     "start-inspector": "./start-inspector.sh"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.15.1",
-    "axios": "^1.10.0",
-    "zod": "^3.23.8"
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "axios": "^1.12.2",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^24.0.13",
