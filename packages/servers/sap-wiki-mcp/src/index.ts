@@ -659,20 +659,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Handle storage format - use REST API to get Confluence storage XML
       if (format === "storage") {
-        // Extract pageId from URL
-        const pageIdMatch = url.match(/pageId=(\d+)/);
-        if (!pageIdMatch) {
+        // Extract pageId from URL - supports multiple formats:
+        // 1. ?pageId=123456 (query parameter)
+        // 2. /pages/viewpage.action?pageId=123456
+        // 3. /spaces/SPACE/pages/123456/Title (pretty URL)
+        // 4. /pages/123456 (short format)
+        let pageId: string | null = null;
+
+        // Try query parameter format first
+        const queryParamMatch = url.match(/pageId=(\d+)/);
+        if (queryParamMatch) {
+          pageId = queryParamMatch[1];
+        }
+
+        // Try pretty URL format: /spaces/SPACE/pages/PAGEID/Title or /pages/PAGEID
+        if (!pageId) {
+          const prettyUrlMatch = url.match(/\/pages\/(\d+)(?:\/|$)/);
+          if (prettyUrlMatch) {
+            pageId = prettyUrlMatch[1];
+          }
+        }
+
+        if (!pageId) {
           return {
             content: [
               {
                 type: "text",
-                text: "INVALID_URL: Could not extract pageId from URL. URL must contain pageId parameter (e.g., ?pageId=123456)",
+                text: "INVALID_URL: Could not extract pageId from URL. Supported formats:\n- ?pageId=123456\n- /spaces/SPACE/pages/123456/Title\n- /pages/123456",
               },
             ],
             isError: true,
           };
         }
-        const pageId = pageIdMatch[1];
 
         const storageData = await client.getPageStorageFormat(pageId);
         const endTime = Date.now();
