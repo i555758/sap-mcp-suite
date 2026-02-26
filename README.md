@@ -34,7 +34,7 @@ npm run build:all
 
 ### Global MCP Configuration
 
-Create `~/.mcp.json` with absolute paths to the built servers:
+Create or update `~/.claude.json` with the `mcpServers` key containing absolute paths to the built servers:
 
 ```json
 {
