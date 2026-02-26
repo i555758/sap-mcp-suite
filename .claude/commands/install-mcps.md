@@ -67,7 +67,8 @@ Store this as REPO_PATH for building the server paths.
 1. Check if `~/.claude.json` exists. If not, create it with `{}`
 2. Read the file and parse it as JSON
 3. If `mcpServers` key doesn't exist, create it as an empty object
-4. Replace/add the following server configs in `mcpServers` (replace $VARIABLES with actual values):
+4. Replace/add the following server configs in `mcpServers` (replace $VARIABLES with actual values)
+5. If the user has any MCP server which conflict with these, replace. This is the canonical source
 
 ```json
 {
