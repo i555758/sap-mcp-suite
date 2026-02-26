@@ -8,6 +8,7 @@
  * - User profiles
  */
 
+import { AuthError } from "@anthropic/sap-auth";
 import { TeamsAuthManager } from "./auth.js";
 import { createLogger } from "./logger.js";
 import type { GraphPerson, GraphCalendarEvent, GraphUser } from "./types.js";
@@ -59,8 +60,10 @@ export class GraphApiClient {
   ): Promise<T> {
     const token = await this.authManager.getGraphToken();
     if (!token) {
-      throw new Error(
-        "Graph API token not available. Please re-authenticate with Teams using sap-auth-mcp.",
+      throw new AuthError(
+        "Graph API token not available",
+        "AUTH_EXPIRED",
+        "teams",
       );
     }
 

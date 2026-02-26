@@ -5,7 +5,7 @@
  * It wraps the AuthManager to provide a Teams-specific interface.
  */
 
-import { AuthManager } from "@anthropic/sap-auth";
+import { AuthManager, AuthError, AuthExpiredError } from "@anthropic/sap-auth";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("teams-auth");
@@ -58,10 +58,7 @@ export class TeamsAuthManager {
     );
 
     if (!creds) {
-      throw new Error(
-        "No valid Teams API token found. Please authenticate with Teams using sap-auth-mcp:\n" +
-          '  sap_authenticate with entry_url="https://teams.cloud.microsoft/v2/"',
-      );
+      throw new AuthExpiredError("teams");
     }
 
     if (creds.expiresAt) {

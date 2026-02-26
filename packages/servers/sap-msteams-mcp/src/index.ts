@@ -19,7 +19,8 @@ import {
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { TeamsAuthManager, AuthError, AuthExpiredError } from "./auth.js";
+import { TeamsAuthManager } from "./auth.js";
+import { formatAuthError, isAuthError } from "@anthropic/sap-auth";
 import { TeamsApiClient } from "./api.js";
 import { GraphApiClient } from "./graph-api.js";
 import { createLogger, isVerbose, getLogFilePath } from "./logger.js";
@@ -403,26 +404,6 @@ const server = new Server(
 const authManager = new TeamsAuthManager(undefined, REGION);
 const apiClient = new TeamsApiClient(authManager);
 const graphClient = new GraphApiClient(authManager);
-
-// Helper function to get SAP auth required error response
-function getSapAuthRequiredError(reason: string) {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            error: reason,
-            hint: `Please authenticate with Teams using sap-auth-mcp: sap_authenticate with entry_url="https://teams.cloud.microsoft/v2/"`,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-    isError: true,
-  };
-}
 
 // ============================================================================
 // Helper function to get typed parameters
@@ -886,27 +867,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    // Check if this is an authentication-related error using the new error types
-    if (
-      error instanceof AuthError ||
-      error instanceof AuthExpiredError ||
-      errorMessage.includes("authenticate") ||
-      errorMessage.includes("token") ||
-      errorMessage.includes("SAP auth") ||
-      errorMessage.includes("sap-auth")
-    ) {
-      return getSapAuthRequiredError(errorMessage);
+    if (isAuthError(error)) {
+      return formatAuthError(error) as { content: Array<{ type: "text"; text: string }>; isError: boolean };
     }
 
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: errorMessage }, null, 2),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify({ error: errorMessage }, null, 2) }],
       isError: true,
     };
   }

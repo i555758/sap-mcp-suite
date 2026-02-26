@@ -6,10 +6,16 @@ import {
   AuthNotConfiguredError,
 } from "@anthropic/sap-auth";
 
-// Custom error for auth redirect detection
-class AuthRedirectError extends Error {
-  constructor(public redirectUrl: string) {
-    super("AUTHENTICATION_REQUIRED");
+/**
+ * Custom error for auth redirect detection
+ * Extends AuthExpiredError so it can be caught with isAuthError()
+ */
+class AuthRedirectError extends AuthExpiredError {
+  public readonly redirectUrl: string;
+
+  constructor(redirectUrl: string) {
+    super("wiki");
+    this.redirectUrl = redirectUrl;
     this.name = "AuthRedirectError";
   }
 }
@@ -188,13 +194,14 @@ export class PureWikiHttpClient {
     try {
       return await requestFn();
     } catch (error: any) {
-      // Handle auth redirect error
+      // Handle auth redirect error or legacy AUTHENTICATION_REQUIRED
       if (
         error instanceof AuthRedirectError ||
+        error instanceof AuthError ||
         error.message === "AUTHENTICATION_REQUIRED"
       ) {
         if (this.usePATAuth) {
-          throw new Error("AUTHENTICATION_REQUIRED");
+          throw new AuthExpiredError("wiki");
         }
 
         // Try to reload cookies once
@@ -210,20 +217,21 @@ export class PureWikiHttpClient {
           } catch (retryError: any) {
             if (
               retryError instanceof AuthRedirectError ||
+              retryError instanceof AuthError ||
               retryError.message === "AUTHENTICATION_REQUIRED"
             ) {
-              throw new Error("AUTHENTICATION_REQUIRED");
+              throw new AuthExpiredError("wiki");
             }
             throw retryError;
           }
         }
-        throw new Error("AUTHENTICATION_REQUIRED");
+        throw new AuthExpiredError("wiki");
       }
 
       // Handle 401
       if (error.response?.status === 401) {
         if (this.usePATAuth) {
-          throw new Error("AUTHENTICATION_REQUIRED");
+          throw new AuthExpiredError("wiki");
         }
 
         console.log(`🔄 401 error for ${context}, trying to reload cookies...`);
@@ -237,7 +245,7 @@ export class PureWikiHttpClient {
             // Fall through
           }
         }
-        throw new Error("AUTHENTICATION_REQUIRED");
+        throw new AuthExpiredError("wiki");
       }
 
       throw error;
@@ -261,7 +269,7 @@ export class PureWikiHttpClient {
         throw new Error(`HTTP ${response.status}: Unexpected response format`);
       }, "CQL search");
     } catch (error: any) {
-      if (error.message === "AUTHENTICATION_REQUIRED") {
+      if (error instanceof AuthError) {
         throw error;
       }
       if (error.response?.status === 403) {
@@ -302,7 +310,7 @@ export class PureWikiHttpClient {
         throw new Error(`HTTP ${response.status}: Unexpected response format`);
       }, "wiki search");
     } catch (error: any) {
-      if (error.message === "AUTHENTICATION_REQUIRED") {
+      if (error instanceof AuthError) {
         throw error;
       }
       if (error.response?.status === 403) {
@@ -343,7 +351,7 @@ export class PureWikiHttpClient {
         );
       }, "content fetch");
     } catch (error: any) {
-      if (error.message === "AUTHENTICATION_REQUIRED") {
+      if (error instanceof AuthError) {
         throw error;
       }
       if (error.response?.status === 403) {
@@ -488,7 +496,7 @@ export class PureWikiHttpClient {
         throw new Error(`HTTP ${response.status}: Unexpected response format`);
       }, "get page storage format");
     } catch (error: any) {
-      if (error.message === "AUTHENTICATION_REQUIRED") {
+      if (error instanceof AuthError) {
         throw error;
       }
       if (error.response?.status === 404) {
@@ -564,7 +572,7 @@ export class PureWikiHttpClient {
         throw new Error(`HTTP ${response.status}: Unexpected response format`);
       }, "update page content");
     } catch (error: any) {
-      if (error.message === "AUTHENTICATION_REQUIRED") {
+      if (error instanceof AuthError) {
         throw error;
       }
       if (error.response?.status === 404) {
@@ -647,7 +655,7 @@ export class PureWikiHttpClient {
         throw new Error(`HTTP ${response.status}: Unexpected response format`);
       }, "create page");
     } catch (error: any) {
-      if (error.message === "AUTHENTICATION_REQUIRED") {
+      if (error instanceof AuthError) {
         throw error;
       }
       if (error.response?.status === 403) {
@@ -691,7 +699,7 @@ export class PureWikiHttpClient {
         throw new Error(`HTTP ${response.status}: Unexpected response`);
       }, "delete page");
     } catch (error: any) {
-      if (error.message === "AUTHENTICATION_REQUIRED") {
+      if (error instanceof AuthError) {
         throw error;
       }
       if (error.response?.status === 403) {

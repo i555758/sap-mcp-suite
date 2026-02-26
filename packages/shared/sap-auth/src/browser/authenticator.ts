@@ -121,6 +121,9 @@ export class BrowserAuthenticator {
   private readonly inPrivate = process.env.IN_PRIVATE === 'true';
   private readonly visibleMode = process.env.VISIBLE_MODE === 'true';
   private readonly forceManualFallback = process.env.FORCE_MANUAL_FALLBACK === 'true';
+  // Force visible mode - skips headless entirely (useful for certificate selection dialogs)
+  private readonly forceVisible = process.env.SAP_AUTH_FORCE_VISIBLE === 'true' ||
+                                  process.env.SAP_AUTH_SKIP_HEADLESS === 'true';
 
   // Browser instance management
   private isInitialized = false;
@@ -299,6 +302,12 @@ export class BrowserAuthenticator {
    * Unified browser launch method - prevents multiple instances
    */
   private async launchBrowser(headless: boolean = true): Promise<void> {
+    // Check for force visible mode - skip headless entirely
+    if (headless && this.forceVisible) {
+      console.log('🔧 SAP_AUTH_FORCE_VISIBLE or SAP_AUTH_SKIP_HEADLESS is set - skipping headless mode');
+      headless = false;
+    }
+
     const desiredMode = headless ? 'headless' : 'visible';
 
     // Skip if browser is already running in the desired mode
@@ -446,6 +455,12 @@ export class BrowserAuthenticator {
         console.log(`🔐 SAP Auth Account: ${this.userEmail}`);
       }
 
+      // Handle force visible mode preference (for certificate selection scenarios)
+      if (this.forceVisible) {
+        console.log('🔧 Force visible mode: Starting with visible browser (SAP_AUTH_FORCE_VISIBLE/SAP_AUTH_SKIP_HEADLESS)');
+        return await this.authenticateWithVisibleMode(entryUrl, domain);
+      }
+
       // Handle visible mode preference
       if (this.visibleMode) {
         console.log('👁️ Visible mode: Starting with visible browser');
@@ -460,12 +475,27 @@ export class BrowserAuthenticator {
         throw new AuthBrowserError(domain, 'Failed to create page');
       }
 
-      // Navigate to entry URL
+      // Navigate to entry URL - catch timeout for certificate selection scenarios
       console.log(`🌐 Navigating to ${entryUrl}...`);
-      await this.page.goto(entryUrl, {
-        waitUntil: 'networkidle2',
-        timeout: 45000,
-      });
+      try {
+        await this.page.goto(entryUrl, {
+          waitUntil: 'networkidle2',
+          timeout: 45000,
+        });
+      } catch (navError) {
+        // Navigation timeout often indicates certificate selection dialog blocking in headless mode
+        const navErrorMsg = navError instanceof Error ? navError.message : 'Unknown error';
+        console.log(`⚠️ Navigation issue in headless mode: ${navErrorMsg}`);
+
+        if (navErrorMsg.includes('timeout') || navErrorMsg.includes('Timeout') ||
+            navErrorMsg.includes('net::ERR_') || navErrorMsg.includes('SSL') ||
+            navErrorMsg.includes('certificate')) {
+          console.log('🔄 Navigation blocked (likely certificate selection) - switching to visible browser...');
+          await this.safeBrowserClose();
+          return await this.authenticateWithVisibleMode(entryUrl, domain);
+        }
+        throw navError;
+      }
 
       await new Promise((resolve) => setTimeout(resolve, 3000));
       let currentUrl = this.page.url();
@@ -512,9 +542,10 @@ export class BrowserAuthenticator {
       if (error instanceof AuthBrowserError) {
         throw error;
       }
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       throw new AuthBrowserError(
         domain,
-        error instanceof Error ? error.message : 'Unknown error',
+        `${errorMessage}`,
       );
     }
   }
@@ -617,7 +648,7 @@ export class BrowserAuthenticator {
     const success = await this.waitForAuthenticationCompletion(domain);
 
     if (!success) {
-      throw new AuthBrowserError(domain, 'Authentication timeout');
+      throw new AuthBrowserError(domain, 'Authentication timeout after switching to visible mode');
     }
 
     const cookies = await this.extractCookies(domain);
@@ -627,6 +658,7 @@ export class BrowserAuthenticator {
 
   /**
    * Attempt headless authentication (email clicking, etc.)
+   * Detects when user interaction is needed, including certificate selection dialogs
    */
   private async attemptHeadlessAuth(
     domain: string,
@@ -640,7 +672,16 @@ export class BrowserAuthenticator {
     }
 
     try {
-      const currentUrl = this.page.url();
+      // First, try to get the current URL with a timeout to detect cert selection hangs
+      let currentUrl: string;
+      try {
+        currentUrl = this.page.url();
+      } catch (urlError) {
+        // If we can't even get the URL, something is blocking (possibly cert dialog)
+        console.log('⚠️ Cannot access page URL - possible certificate selection dialog');
+        
+        return { success: false, needsUserInteraction: true };
+      }
 
       // Check if not on Microsoft login
       if (!currentUrl.includes('microsoftonline.com')) {
@@ -652,8 +693,21 @@ export class BrowserAuthenticator {
         return { success: false, needsUserInteraction: true };
       }
 
-      // Look for email input field
-      const emailInput = await this.page.$('input[type="email"]');
+      // Look for email input field with timeout
+      let emailInput;
+      try {
+        emailInput = await Promise.race([
+          this.page.$('input[type="email"]'),
+          new Promise<null>((_, reject) =>
+            setTimeout(() => reject(new Error('Element search timeout')), 10000)
+          )
+        ]);
+      } catch (timeoutError) {
+        console.log('⚠️ Timeout searching for email input - possible certificate selection dialog');
+        
+        return { success: false, needsUserInteraction: true };
+      }
+
       if (emailInput) {
         if (!this.userEmail) {
           console.log('⚠️ No SAP_AUTH_ACCOUNT set, need visible browser for email input');
@@ -662,25 +716,49 @@ export class BrowserAuthenticator {
 
         console.log(`📧 Filling email input with: ${this.userEmail}`);
 
-        // Fill email
-        await emailInput.click();
-        await emailInput.evaluate((el) => ((el as HTMLInputElement).value = ''));
-        await emailInput.type(this.userEmail);
+        // Fill email with timeout protection
+        try {
+          await Promise.race([
+            (async () => {
+              await (emailInput as any).click();
+              await (emailInput as any).evaluate((el: HTMLInputElement) => el.value = '');
+              await (emailInput as any).type(this.userEmail);
+            })(),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('Email input timeout')), 15000)
+            )
+          ]);
+        } catch (inputError) {
+          console.log('⚠️ Timeout during email input - possible certificate dialog blocking');
+          
+          return { success: false, needsUserInteraction: true };
+        }
 
-        // Click submit
-        const submitButton =
-          (await this.page.$('input[type="submit"]')) ||
-          (await this.page.$('button[type="submit"]')) ||
-          (await this.page.$('#idSIButton9'));
+        // Click submit with timeout protection
+        try {
+          const submitButton =
+            (await this.page.$('input[type="submit"]')) ||
+            (await this.page.$('button[type="submit"]')) ||
+            (await this.page.$('#idSIButton9'));
 
-        if (submitButton) {
-          console.log('🖱️ Clicking submit button...');
-          await submitButton.click();
-          await new Promise((resolve) => setTimeout(resolve, 3000));
+          if (submitButton) {
+            console.log('🖱️ Clicking submit button...');
+            await Promise.race([
+              submitButton.click(),
+              new Promise<void>((_, reject) =>
+                setTimeout(() => reject(new Error('Submit click timeout')), 10000)
+              )
+            ]);
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+          }
+        } catch (submitError) {
+          console.log('⚠️ Timeout during submit - possible certificate dialog blocking');
+          
+          return { success: false, needsUserInteraction: true };
         }
       }
 
-      // Look for account selection
+      // Look for account selection with timeout protection
       const accountSelectors = [
         '.table-row',
         '[data-test-id*="@"]',
@@ -690,9 +768,12 @@ export class BrowserAuthenticator {
 
       for (const selector of accountSelectors) {
         try {
-          const elements = await this.page.$$(selector);
+          const elements = await Promise.race([
+            this.page.$$(selector),
+            new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 5000))
+          ]);
           for (const element of elements) {
-            const text = await element.evaluate((el) => el.textContent || '');
+            const text = await element.evaluate((el: Element) => el.textContent || '');
             const targetEmail = this.userEmail || '@sap.com';
             if (text.includes(targetEmail) || text.includes('@')) {
               console.log(`🖱️ Clicking account: ${text.substring(0, 40)}...`);
@@ -717,9 +798,17 @@ export class BrowserAuthenticator {
       // Handle automatic prompts
       await this.handleAutomaticPrompts();
 
-      // Check if we reached target
+      // Check if we reached target with timeout protection
       await new Promise((resolve) => setTimeout(resolve, 3000));
-      const newUrl = this.page.url();
+
+      let newUrl: string;
+      try {
+        newUrl = this.page.url();
+      } catch {
+        console.log('⚠️ Cannot access page URL after auth attempt - possible certificate dialog');
+        
+        return { success: false, needsUserInteraction: true };
+      }
 
       const isOnTarget = newUrl.includes(domain) && !this.isLoginUrl(newUrl);
 
@@ -736,23 +825,65 @@ export class BrowserAuthenticator {
       }
 
       // Still on login page - check for MFA or other requirements
-      const pageContent = await this.page.evaluate(() => document.body.textContent || '');
+      let pageContent: string;
+      try {
+        pageContent = await Promise.race([
+          this.page.evaluate(() => document.body.textContent || ''),
+          new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000))
+        ]);
+      } catch {
+        pageContent = '';
+      }
+
+      // Check for indicators that need user interaction
       const needsInteraction =
         pageContent.includes('code') ||
         pageContent.includes('verify') ||
         pageContent.includes('certificate') ||
         pageContent.includes('Authenticator') ||
         pageContent.includes('password') ||
-        pageContent.length < 500;
+        pageContent.includes('smartcard') ||
+        pageContent.includes('smart card') ||
+        pageContent.includes('select a certificate') ||
+        pageContent.includes('Choose a certificate') ||
+        pageContent.length < 500; // Very short content often indicates a dialog/prompt
 
       if (needsInteraction) {
         console.log('🔐 Additional authentication steps required');
+        if (pageContent.includes('certificate') || pageContent.includes('smartcard') || pageContent.includes('smart card')) {
+          
+        }
         return { success: false, needsUserInteraction: true };
       }
 
       return { success: false, needsUserInteraction: true };
     } catch (error) {
-      console.log(`❌ Headless auth failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.log(`❌ Headless auth failed: ${errorMessage}`);
+
+      // Check for common certificate-related error patterns
+      const certRelatedPatterns = [
+        'timeout',
+        'navigation',
+        'net::ERR_',
+        'SSL',
+        'certificate',
+        'TLS',
+        'handshake',
+        'connection refused',
+        'ERR_CERT_',
+        'ERR_SSL_',
+      ];
+
+      const isCertRelated = certRelatedPatterns.some(pattern =>
+        errorMessage.toLowerCase().includes(pattern.toLowerCase())
+      );
+
+      if (isCertRelated) {
+        console.log('⚠️ Error may be related to certificate selection or SSL handshake');
+        
+      }
+
       return { success: false, needsUserInteraction: true };
     }
   }
@@ -945,8 +1076,12 @@ export class BrowserAuthenticator {
         console.log(`🔐 SAP Auth Account: ${this.userEmail}`);
       }
 
-      // Handle visible mode preference
-      if (this.visibleMode) {
+      // Handle force visible mode preference (for certificate selection scenarios)
+      if (this.forceVisible) {
+        console.log('🔧 Force visible mode: Starting with visible browser (SAP_AUTH_FORCE_VISIBLE/SAP_AUTH_SKIP_HEADLESS)');
+        await this.launchBrowser(false);
+      } else if (this.visibleMode) {
+        // Handle visible mode preference
         console.log('👁️ Visible mode: Starting with visible browser');
         await this.launchBrowser(false);
       } else {
@@ -959,12 +1094,38 @@ export class BrowserAuthenticator {
         throw new AuthBrowserError(domain, 'Failed to create page');
       }
 
-      // Navigate to entry URL
+      // Navigate to entry URL - catch timeout for certificate selection scenarios
       console.log(`🌐 Navigating to ${entryUrl}...`);
-      await this.page.goto(entryUrl, {
-        waitUntil: 'networkidle2',
-        timeout: 45000,
-      });
+      try {
+        await this.page.goto(entryUrl, {
+          waitUntil: 'networkidle2',
+          timeout: 45000,
+        });
+      } catch (navError) {
+        // Navigation timeout often indicates certificate selection dialog blocking
+        const navErrorMsg = navError instanceof Error ? navError.message : 'Unknown error';
+        console.log(`⚠️ Navigation issue: ${navErrorMsg}`);
+
+        // Only auto-fallback if we were in headless mode
+        if (!this.visibleMode && !this.forceVisible &&
+            (navErrorMsg.includes('timeout') || navErrorMsg.includes('Timeout') ||
+             navErrorMsg.includes('net::ERR_') || navErrorMsg.includes('SSL') ||
+             navErrorMsg.includes('certificate'))) {
+          console.log('🔄 Navigation blocked (likely certificate selection) - switching to visible browser...');
+          await this.safeBrowserClose();
+          // Restart in visible mode
+          await this.launchBrowser(false);
+          if (!this.page) {
+            throw new AuthBrowserError(domain, 'Failed to create visible page after fallback');
+          }
+          await this.page.goto(entryUrl, {
+            waitUntil: 'networkidle2',
+            timeout: 60000,
+          });
+        } else {
+          throw navError;
+        }
+      }
 
       await new Promise((resolve) => setTimeout(resolve, 3000));
       let currentUrl = this.page.url();
@@ -1128,9 +1289,10 @@ export class BrowserAuthenticator {
       if (error instanceof AuthBrowserError) {
         throw error;
       }
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       throw new AuthBrowserError(
         domain,
-        error instanceof Error ? error.message : 'Unknown error',
+        `${errorMessage}`,
       );
     }
   }

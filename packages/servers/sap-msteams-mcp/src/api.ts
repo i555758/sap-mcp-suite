@@ -4,6 +4,7 @@
  * Handles all API interactions with Microsoft Teams.
  */
 
+import { AuthError } from "@anthropic/sap-auth";
 import { TeamsAuthManager } from "./auth.js";
 import { createLogger } from "./logger.js";
 import type {
@@ -112,9 +113,10 @@ export class TeamsApiClient {
         this.authManager.invalidateToken();
         return this.apiRequest(endpoint, options, retryCount + 1);
       }
-      throw new Error(
-        `Authentication failed after ${MAX_RETRY_ATTEMPTS} retries. ` +
-          "Please re-authenticate using sap-auth-mcp.",
+      throw new AuthError(
+        `Authentication failed after ${MAX_RETRY_ATTEMPTS} retries`,
+        "AUTH_EXPIRED",
+        "teams",
       );
     }
 

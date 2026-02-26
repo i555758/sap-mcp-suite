@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { PureWikiHttpClient } from "./pure-http-client.js";
+import { formatAuthError, isAuthError } from "@anthropic/sap-auth";
 
 // Read configuration from environment variables
 const WIKI_DOMAIN = process.env.WIKI_DOMAIN;
@@ -41,6 +42,7 @@ async function getHttpClient(): Promise<PureWikiHttpClient> {
 
 /**
  * Creates a standardized auth error response for cookie-based authentication
+ * This function is kept for backward compatibility but now delegates to the centralized helper.
  */
 async function createAuthErrorResponse(): Promise<{
   content: Array<{ type: string; text: string }>;
@@ -59,35 +61,8 @@ async function createAuthErrorResponse(): Promise<{
     };
   }
 
-  // For cookie-based auth, return structured error for sap-auth-mcp
-  const client = await getHttpClient();
-  const storageInfo = await client.getCookieStorageInfo();
-
-  // Extract directory path from file path
-  const storePath = storageInfo.filePath.substring(
-    0,
-    storageInfo.filePath.lastIndexOf("/"),
-  );
-
-  const structuredError = {
-    error: "SAP_AUTH_REQUIRED",
-    details:
-      "Need call SAP auth MCP to prepare cookie and redo function after.",
-    data: {
-      store_path: storePath,
-      entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
-    },
-  };
-
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(structuredError, null, 2),
-      },
-    ],
-    isError: true,
-  };
+  // Use centralized auth error formatter
+  return formatAuthError(new Error("AUTHENTICATION_REQUIRED"), "wiki");
 }
 
 const server = new Server(
@@ -437,10 +412,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } catch (error) {
       console.error("❌ Search error:", error);
 
+      if (isAuthError(error)) {
+        return await createAuthErrorResponse();
+      }
+
       if (error instanceof Error) {
-        if (error.message === "AUTHENTICATION_REQUIRED") {
-          return await createAuthErrorResponse();
-        }
         if (error.message === "NETWORK_ERROR") {
           return {
             content: [
@@ -582,10 +558,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } catch (error) {
       console.error("❌ CQL search error:", error);
 
+      if (isAuthError(error)) {
+        return await createAuthErrorResponse();
+      }
+
       if (error instanceof Error) {
-        if (error.message === "AUTHENTICATION_REQUIRED") {
-          return await createAuthErrorResponse();
-        }
         if (error.message === "NETWORK_ERROR") {
           return {
             content: [
@@ -732,10 +709,8 @@ ${storageData.content}`;
     } catch (error) {
       console.error("❌ Wiki content fetch error:", error);
 
-      if (error instanceof Error) {
-        if (error.message === "AUTHENTICATION_REQUIRED") {
-          return await createAuthErrorResponse();
-        }
+      if (isAuthError(error)) {
+        return await createAuthErrorResponse();
       }
 
       return {
@@ -785,11 +760,11 @@ URL: ${result.url}`,
     } catch (error) {
       console.error("❌ Wiki update error:", error);
 
-      if (error instanceof Error) {
-        if (error.message === "AUTHENTICATION_REQUIRED") {
-          return await createAuthErrorResponse();
-        }
+      if (isAuthError(error)) {
+        return await createAuthErrorResponse();
+      }
 
+      if (error instanceof Error) {
         // Handle specific update errors
         if (error.message.includes("VERSION_CONFLICT")) {
           return {
@@ -870,11 +845,11 @@ URL: ${result.url}`,
     } catch (error) {
       console.error("❌ Wiki create page error:", error);
 
-      if (error instanceof Error) {
-        if (error.message === "AUTHENTICATION_REQUIRED") {
-          return await createAuthErrorResponse();
-        }
+      if (isAuthError(error)) {
+        return await createAuthErrorResponse();
+      }
 
+      if (error instanceof Error) {
         // Handle specific create errors
         if (error.message.includes("DUPLICATE_TITLE")) {
           return {
@@ -963,11 +938,11 @@ Page ID: ${result.pageId}`,
     } catch (error) {
       console.error("❌ Wiki delete page error:", error);
 
-      if (error instanceof Error) {
-        if (error.message === "AUTHENTICATION_REQUIRED") {
-          return await createAuthErrorResponse();
-        }
+      if (isAuthError(error)) {
+        return await createAuthErrorResponse();
+      }
 
+      if (error instanceof Error) {
         // Handle specific delete errors
         if (error.message.includes("PAGE_NOT_FOUND")) {
           return {

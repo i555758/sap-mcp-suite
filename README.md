@@ -2,15 +2,33 @@
 
 Monorepo containing MCP (Model Context Protocol) servers for SAP enterprise services.
 
-## Quick Setup (Claude Code)
+## Installation (Claude Code)
 
-If you have Claude Code installed, open it in this folder and run this skill:
+Clone the repository and open Claude Code in the folder:
+
+```bash
+git clone https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite.git
+cd sap-mcp-suite
+claude
+```
+
+Then run the install command:
 
 ```
 /install-mcps
 ```
 
-This will build all servers and configure them globally for Claude Code.
+This will build all servers and configure them globally for Claude Code. The command detects existing configurations and only asks for missing values.
+
+### Updating
+
+To pull the latest changes and rebuild:
+
+```
+/update-mcps
+```
+
+This fetches updates from the remote repository, rebuilds all servers, and detects if any new MCP servers were added.
 
 ## MCP Servers
 
@@ -23,76 +41,6 @@ This will build all servers and configure them globally for Claude Code.
 | mcp-github | GitHub API for tools.sap and wdf.sap.corp | PAT |
 | playwright-mcp | Browser automation (used for auth flows) | - |
 
-## Manual Installation
-
-```bash
-git clone https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite.git
-cd sap-mcp-suite
-npm run install:all
-npm run build:all
-```
-
-### Global MCP Configuration
-
-Create or update `~/.claude.json` with the `mcpServers` key containing absolute paths to the built servers:
-
-```json
-{
-  "mcpServers": {
-    "sap-auth-mcp": {
-      "command": "node",
-      "args": ["/path/to/sap-mcp-suite/packages/servers/sap-auth-mcp/dist/index.js"],
-      "env": {
-        "SAP_AUTH_ACCOUNT": "your.email@sap.com"
-      }
-    },
-    "sap-jira": {
-      "command": "node",
-      "args": ["/path/to/sap-mcp-suite/packages/servers/sap-jira-mcp/dist/index.js"],
-      "env": {
-        "JIRA_DOMAIN": "jira.tools.sap"
-      }
-    },
-    "sap-msteams": {
-      "command": "node",
-      "args": ["/path/to/sap-mcp-suite/packages/servers/sap-msteams-mcp/dist/index.js"],
-      "env": {
-        "SAP_TEAMS_REGION": "emea"
-      }
-    },
-    "sap-wiki": {
-      "command": "node",
-      "args": ["/path/to/sap-mcp-suite/packages/servers/sap-wiki-mcp/dist/index.js"]
-    },
-    "github-tools": {
-      "command": "node",
-      "args": ["/path/to/sap-mcp-suite/packages/servers/mcp-github/build/index.js"],
-      "env": {
-        "GITHUB_API_URL": "https://github.tools.sap/api/v3",
-        "GITHUB_TOKEN": "your-pat-token",
-        "GITHUB_DEFAULT_OWNER": "your-i-number"
-      }
-    },
-    "github-wdf": {
-      "command": "node",
-      "args": ["/path/to/sap-mcp-suite/packages/servers/mcp-github/build/index.js"],
-      "env": {
-        "GITHUB_API_URL": "https://github.wdf.sap.corp/api/v3",
-        "GITHUB_TOKEN": "your-pat-token",
-        "GITHUB_DEFAULT_OWNER": "your-i-number",
-        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
-      }
-    },
-    "playwright": {
-      "command": "node",
-      "args": ["/path/to/sap-mcp-suite/packages/servers/playwright-mcp/packages/playwright-mcp/index.js"]
-    }
-  }
-}
-```
-
-Restart Claude Code after creating/updating this file.
-
 ## Authentication
 
 After installation, authenticate with SAP services using `sap_authenticate`:
@@ -103,7 +51,7 @@ After installation, authenticate with SAP services using `sap_authenticate`:
 | Jira | `https://jira.tools.sap/` |
 | Wiki | `https://wiki.one.int.sap/` |
 
-Credentials are cached in `~/.claude/sap-auth.json` and auto-refresh when possible (Teams OAuth). SSO cookies expire after ~8 hours and require re-authentication.
+Credentials are cached in `~/.sap-mcp/auth.json` and auto-refresh when possible (Teams OAuth). SSO cookies expire after ~8 hours and require re-authentication.
 
 ## Structure
 

@@ -2,6 +2,8 @@
 
 Interactive setup wizard that builds all MCP servers from this monorepo and configures them globally for Claude Code.
 
+Supports both fresh installs and updates to existing configurations.
+
 ---
 
 ## Step 1: Verify Directory
@@ -34,23 +36,59 @@ Verify build succeeded by checking all dist folders exist.
 
 ---
 
-## Step 3: Get User Configuration
+## Step 3: Check Existing Configuration
 
-Ask the user for the following information (they can type responses directly):
+Read `~/.claude.json` and extract existing MCP configuration values:
 
-1. **GitHub tokens:**
-   - github.tools.sap Personal Access Token (create at https://github.tools.sap/settings/tokens with scopes: repo, read:org)
-   - github.wdf.sap.corp Personal Access Token (create at https://github.wdf.sap.corp/settings/tokens with scopes: repo, read:org)
+```bash
+cat ~/.claude.json 2>/dev/null || echo "{}"
+```
 
-2. **User info:**
-   - GitHub username (I-number)
-   - SAP email address
-
-3. **Teams region:** Use AskUserQuestion with options: "amer", "emea", "apj"
+Extract existing values from mcpServers if they exist:
+- `EXISTING_EMAIL` from `sap-auth-mcp.env.SAP_AUTH_ACCOUNT`
+- `EXISTING_TEAMS_REGION` from `sap-msteams.env.SAP_TEAMS_REGION`
+- `EXISTING_GITHUB_TOOLS_TOKEN` from `github-tools.env.GITHUB_TOKEN`
+- `EXISTING_GITHUB_WDF_TOKEN` from `github-wdf.env.GITHUB_TOKEN`
+- `EXISTING_GITHUB_USERNAME` from `github-tools.env.GITHUB_DEFAULT_OWNER`
 
 ---
 
-## Step 4: Determine Absolute Paths
+## Step 4: Get User Configuration (Only Missing Values)
+
+**Only ask for values that are NOT already configured.**
+
+Show the user what's already configured:
+```
+Existing configuration detected:
+  - SAP Email: [value or "not set"]
+  - Teams Region: [value or "not set"]
+  - GitHub Username: [value or "not set"]
+  - github.tools.sap Token: [configured or "not set"]
+  - github.wdf.sap.corp Token: [configured or "not set"]
+```
+
+For any missing values, ask the user:
+
+1. **If SAP email is missing:**
+   - Ask for SAP email address (e.g., name@sap.com)
+
+2. **If GitHub username is missing:**
+   - Ask for GitHub username (I-number)
+
+3. **If github.tools.sap token is missing:**
+   - Ask for Personal Access Token (create at https://github.tools.sap/settings/tokens with scopes: repo, read:org)
+
+4. **If github.wdf.sap.corp token is missing:**
+   - Ask for Personal Access Token (create at https://github.wdf.sap.corp/settings/tokens with scopes: repo, read:org)
+
+5. **If Teams region is missing:**
+   - Use AskUserQuestion with options: "amer", "emea", "apj"
+
+If ALL values are already configured, tell the user and ask if they want to reconfigure anything. If not, skip to Step 6.
+
+---
+
+## Step 5: Determine Absolute Paths
 
 Get the absolute path to the repo:
 
@@ -62,13 +100,14 @@ Store this as REPO_PATH for building the server paths.
 
 ---
 
-## Step 5: Update ~/.claude.json
+## Step 6: Update ~/.claude.json
 
 1. Check if `~/.claude.json` exists. If not, create it with `{}`
 2. Read the file and parse it as JSON
 3. If `mcpServers` key doesn't exist, create it as an empty object
-4. Replace/add the following server configs in `mcpServers` (replace $VARIABLES with actual values)
-5. If the user has any MCP server which conflict with these, replace. This is the canonical source
+4. Replace/add the following server configs in `mcpServers`
+5. Use EXISTING values where available, NEW values where provided
+6. If the user has any MCP server which conflict with these, replace. This is the canonical source
 
 ```json
 {
@@ -127,7 +166,7 @@ Write the updated JSON back to `~/.claude.json`
 
 ---
 
-## Step 6: Restart and Resume
+## Step 7: Restart and Resume
 
 Tell the user:
 
@@ -161,7 +200,7 @@ STOP here. The user must restart and resume.
 
 ---
 
-## Step 7: Verify Installation
+## Step 8: Verify Installation
 
 After user resumes, verify all MCP servers are working by calling a tool from each:
 
@@ -202,7 +241,7 @@ If any fail with "No such tool":
 
 ---
 
-## Step 8: Complete
+## Step 9: Complete
 
 ```
 ============================================================

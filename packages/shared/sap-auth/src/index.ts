@@ -68,3 +68,7 @@ export { ApiTokenMethod } from './methods/api-token.js';
 
 // Browser authenticator (for advanced use)
 export { BrowserAuthenticator } from './browser/index.js';
+
+// MCP helpers (for consistent error handling)
+export { formatAuthError, isAuthError } from './mcp-helpers.js';
+export type { McpErrorResponse } from './mcp-helpers.js';
