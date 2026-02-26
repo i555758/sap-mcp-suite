@@ -32,10 +32,22 @@ export class GraphApiClient {
   }
 
   /**
-   * Check if Graph API is available (token exists)
+   * Map raw Graph API user data to GraphUser type
    */
-  isAvailable(): boolean {
-    return this.authManager.hasGraphToken();
+  private mapGraphUser(user: any): GraphUser {
+    return {
+      id: user.id,
+      displayName: user.displayName,
+      mail: user.mail,
+      userPrincipalName: user.userPrincipalName,
+      jobTitle: user.jobTitle,
+      department: user.department,
+      officeLocation: user.officeLocation,
+      mobilePhone: user.mobilePhone,
+      businessPhones: user.businessPhones || [],
+      givenName: user.givenName,
+      surname: user.surname,
+    };
   }
 
   /**
@@ -45,7 +57,7 @@ export class GraphApiClient {
     endpoint: string,
     options: RequestInit = {},
   ): Promise<T> {
-    const token = this.authManager.getGraphToken();
+    const token = await this.authManager.getGraphToken();
     if (!token) {
       throw new Error(
         "Graph API token not available. Please re-authenticate with Teams using sap-auth-mcp.",
@@ -191,19 +203,7 @@ export class GraphApiClient {
   async getManager(): Promise<GraphUser | null> {
     try {
       const data = await this.graphRequest<any>(`/me/manager`);
-      return {
-        id: data.id,
-        displayName: data.displayName,
-        givenName: data.givenName,
-        surname: data.surname,
-        mail: data.mail,
-        userPrincipalName: data.userPrincipalName,
-        jobTitle: data.jobTitle,
-        department: data.department,
-        officeLocation: data.officeLocation,
-        mobilePhone: data.mobilePhone,
-        businessPhones: data.businessPhones,
-      };
+      return this.mapGraphUser(data);
     } catch (e: any) {
       if (e.message?.includes("404")) {
         return null; // No manager found
@@ -220,19 +220,7 @@ export class GraphApiClient {
       const data = await this.graphRequest<{ value: any[] }>(
         `/me/directReports?$top=${limit}`,
       );
-      return (data.value ?? []).map((u: any) => ({
-        id: u.id,
-        displayName: u.displayName,
-        givenName: u.givenName,
-        surname: u.surname,
-        mail: u.mail,
-        userPrincipalName: u.userPrincipalName,
-        jobTitle: u.jobTitle,
-        department: u.department,
-        officeLocation: u.officeLocation,
-        mobilePhone: u.mobilePhone,
-        businessPhones: u.businessPhones,
-      }));
+      return (data.value ?? []).map((u: any) => this.mapGraphUser(u));
     } catch {
       return [];
     }
@@ -243,19 +231,7 @@ export class GraphApiClient {
    */
   async getMe(): Promise<GraphUser> {
     const data = await this.graphRequest<any>(`/me`);
-    return {
-      id: data.id,
-      displayName: data.displayName,
-      givenName: data.givenName,
-      surname: data.surname,
-      mail: data.mail,
-      userPrincipalName: data.userPrincipalName,
-      jobTitle: data.jobTitle,
-      department: data.department,
-      officeLocation: data.officeLocation,
-      mobilePhone: data.mobilePhone,
-      businessPhones: data.businessPhones,
-    };
+    return this.mapGraphUser(data);
   }
 }
 

@@ -38,6 +38,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@anthropic/sap-auth": "*",
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {

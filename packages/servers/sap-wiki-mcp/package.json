@@ -24,6 +24,7 @@
     "test:url": "tsc && node -e \"const { PureWikiHttpClient } = require('./dist/pure-http-client.js'); async function test() { const c = new PureWikiHttpClient(); await c.initialize(); const r = await c.fetchWikiContent(process.argv[1], true); console.log(r.substring(0,3000)); } test().catch(e => console.error(e.message));\""
   },
   "dependencies": {
+    "@anthropic/sap-auth": "*",
     "@modelcontextprotocol/sdk": "latest",
     "axios": "^1.12.2",
     "zod": "^3.22.4"

@@ -3,45 +3,6 @@
  */
 
 // ============================================================================
-// Token Types
-// ============================================================================
-
-export interface TokenData {
-  token: string;
-  aud: string;
-  exp: number;
-  expDate: string;
-  refreshedAt: string;
-}
-
-export interface Cookie {
-  name: string;
-  value: string;
-  domain: string;
-  path?: string;
-  expires?: number;
-  httpOnly?: boolean;
-  secure?: boolean;
-  sameSite?: "Strict" | "Lax" | "None";
-}
-
-// Token from sap_tokens.json (saved by sap-auth-mcp)
-export interface GraphToken {
-  token: string;
-  audience: string;
-  expiresAt: number;
-  scopes: string[];
-  appDisplayName?: string;
-  key?: string;
-}
-
-export interface SapTokensFile {
-  tokens: GraphToken[];
-  timestamp: number;
-  source: string;
-}
-
-// ============================================================================
 // Graph API Types
 // ============================================================================
 
@@ -96,14 +57,10 @@ export interface GraphUser {
 // ============================================================================
 
 export interface TeamsConfig {
-  /** User email for SAP SSO authentication */
-  userEmail: string;
   /** Teams region: emea, amer, or apac */
   region?: "emea" | "amer" | "apac";
-  /** Path to store cookies from sap-auth-mcp */
+  /** @deprecated No longer used - auth is handled by @anthropic/sap-auth */
   cookieStorePath?: string;
-  /** Token refresh interval in minutes */
-  tokenRefreshMinutes?: number;
 }
 
 // ============================================================================

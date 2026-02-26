@@ -52,9 +52,51 @@ export class GitHubServer {
         this.token,
         this.configService
       );
-      
+
       this.formatterService = new FormatterService(this.configService);
     }
+  }
+
+  /**
+   * Ensure services are initialized and return them
+   */
+  private async ensureServices(): Promise<{ api: GitHubApiService; formatter: FormatterService }> {
+    await this.initializeServices();
+    if (!this.apiService || !this.formatterService) {
+      throw new Error("Services not initialized");
+    }
+    return { api: this.apiService, formatter: this.formatterService };
+  }
+
+  /**
+   * Format error message for user-friendly display
+   */
+  private formatError(error: unknown, operation: string): string {
+    if (error instanceof Error) {
+      // Check for axios errors with response data
+      const axiosError = error as any;
+      if (axiosError.response?.data?.message) {
+        return `Failed to ${operation}: ${axiosError.response.data.message}`;
+      }
+      if (axiosError.response?.status) {
+        const status = axiosError.response.status;
+        if (status === 401) {
+          return `Failed to ${operation}: Authentication failed. Please check your GitHub token.`;
+        }
+        if (status === 403) {
+          return `Failed to ${operation}: Access forbidden. You may not have permission for this action.`;
+        }
+        if (status === 404) {
+          return `Failed to ${operation}: Resource not found.`;
+        }
+        if (status === 422) {
+          return `Failed to ${operation}: Invalid request parameters.`;
+        }
+        return `Failed to ${operation}: HTTP ${status} error.`;
+      }
+      return `Failed to ${operation}: ${error.message}`;
+    }
+    return `Failed to ${operation}: An unexpected error occurred.`;
   }
 
   /**
@@ -70,21 +112,28 @@ export class GitHubServer {
         inputSchema: {}
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const user = await api.getCurrentUser();
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatUser(user),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "get current user"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const user = await this.apiService.getCurrentUser();
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatUser(user),
-            },
-          ],
-        };
       }
     );
 
@@ -105,21 +154,28 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const repositories = await api.listRepositories(args);
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatRepositoryList(repositories),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "list repositories"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const repositories = await this.apiService.listRepositories(args);
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatRepositoryList(repositories),
-            },
-          ],
-        };
       }
     );
 
@@ -135,24 +191,31 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const repository = await api.getRepository({
+            owner: args.owner,
+            repo: args.repo
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatRepository(repository),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "get repository"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const repository = await this.apiService.getRepository({
-          owner: args.owner,
-          repo: args.repo
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatRepository(repository),
-            },
-          ],
-        };
       }
     );
 
@@ -173,21 +236,28 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const issue = await api.createIssue(args);
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatIssue(issue),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "create issue"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const issue = await this.apiService.createIssue(args);
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatIssue(issue),
-            },
-          ],
-        };
       }
     );
 
@@ -211,44 +281,52 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
-        }
+        try {
+          const { api, formatter } = await this.ensureServices();
 
-        // Create the pull request first
-        let pullRequest = await this.apiService.createPullRequest(args);
-        
-        // If assignees are specified, update the pull request to add them
-        if (args.assignees && args.assignees.length > 0) {
-          pullRequest = await this.apiService.updatePullRequest({
-            owner: args.owner,
-            repo: args.repo,
-            pull_number: pullRequest.number,
-            assignees: args.assignees
-          });
-        }
+          // Create the pull request first
+          let pullRequest = await api.createPullRequest(args);
 
-        // If reviewers are specified, request them
-        if ((args.reviewers && args.reviewers.length > 0) || (args.team_reviewers && args.team_reviewers.length > 0)) {
-          pullRequest = await this.apiService.requestReviewers({
-            owner: args.owner,
-            repo: args.repo,
-            pull_number: pullRequest.number,
-            reviewers: args.reviewers,
-            team_reviewers: args.team_reviewers
-          });
-        }
+          // If assignees are specified, update the pull request to add them
+          if (args.assignees && args.assignees.length > 0) {
+            pullRequest = await api.updatePullRequest({
+              owner: args.owner,
+              repo: args.repo,
+              pull_number: pullRequest.number,
+              assignees: args.assignees
+            });
+          }
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatPullRequest(pullRequest),
-            },
-          ],
-        };
+          // If reviewers are specified, request them
+          if ((args.reviewers && args.reviewers.length > 0) || (args.team_reviewers && args.team_reviewers.length > 0)) {
+            pullRequest = await api.requestReviewers({
+              owner: args.owner,
+              repo: args.repo,
+              pull_number: pullRequest.number,
+              reviewers: args.reviewers,
+              team_reviewers: args.team_reviewers
+            });
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatPullRequest(pullRequest),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "create pull request"),
+              },
+            ],
+            isError: true,
+          };
+        }
       }
     );
 
@@ -267,28 +345,35 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const pullRequest = await api.requestReviewers({
+            owner: args.owner,
+            repo: args.repo,
+            pull_number: args.pull_number,
+            reviewers: args.reviewers,
+            team_reviewers: args.team_reviewers
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatPullRequest(pullRequest),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "update pull request reviewers"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const pullRequest = await this.apiService.requestReviewers({
-          owner: args.owner,
-          repo: args.repo,
-          pull_number: args.pull_number,
-          reviewers: args.reviewers,
-          team_reviewers: args.team_reviewers
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatPullRequest(pullRequest),
-            },
-          ],
-        };
       }
     );
 
@@ -305,26 +390,33 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const details = await api.getPullRequestWithDetails({
+            owner: args.owner,
+            repo: args.repo,
+            pull_number: args.pull_number
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatPullRequestWithDetails(details),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "get pull request details"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const details = await this.apiService.getPullRequestWithDetails({
-          owner: args.owner,
-          repo: args.repo,
-          pull_number: args.pull_number
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatPullRequestWithDetails(details),
-            },
-          ],
-        };
       }
     );
 
@@ -343,28 +435,35 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const reviews = await api.listPullRequestReviews({
+            owner: args.owner,
+            repo: args.repo,
+            pull_number: args.pull_number,
+            per_page: args.per_page,
+            page: args.page
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatPullRequestReviews(reviews),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "list pull request reviews"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const reviews = await this.apiService.listPullRequestReviews({
-          owner: args.owner,
-          repo: args.repo,
-          pull_number: args.pull_number,
-          per_page: args.per_page,
-          page: args.page
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatPullRequestReviews(reviews),
-            },
-          ],
-        };
       }
     );
 
@@ -384,53 +483,60 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
-        }
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const commentType = args.comment_type || 'all';
+          let output = '';
 
-        const commentType = args.comment_type || 'all';
-        let output = '';
+          if (commentType === 'review' || commentType === 'all') {
+            const reviewComments = await api.listPullRequestReviewComments({
+              owner: args.owner,
+              repo: args.repo,
+              pull_number: args.pull_number,
+              per_page: args.per_page,
+              page: args.page
+            });
 
-        if (commentType === 'review' || commentType === 'all') {
-          const reviewComments = await this.apiService.listPullRequestReviewComments({
-            owner: args.owner,
-            repo: args.repo,
-            pull_number: args.pull_number,
-            per_page: args.per_page,
-            page: args.page
-          });
-          
-          if (commentType === 'all') {
-            output += '# Review Comments\n\n';
+            if (commentType === 'all') {
+              output += '# Review Comments\n\n';
+            }
+            output += formatter.formatPullRequestReviewComments(reviewComments);
           }
-          output += this.formatterService.formatPullRequestReviewComments(reviewComments);
-        }
 
-        if (commentType === 'issue' || commentType === 'all') {
-          const issueComments = await this.apiService.listPullRequestIssueComments({
-            owner: args.owner,
-            repo: args.repo,
-            pull_number: args.pull_number,
-            per_page: args.per_page,
-            page: args.page
-          });
-          
-          if (commentType === 'all') {
-            output += '\n\n# General Comments\n\n';
+          if (commentType === 'issue' || commentType === 'all') {
+            const issueComments = await api.listPullRequestIssueComments({
+              owner: args.owner,
+              repo: args.repo,
+              pull_number: args.pull_number,
+              per_page: args.per_page,
+              page: args.page
+            });
+
+            if (commentType === 'all') {
+              output += '\n\n# General Comments\n\n';
+            }
+            output += formatter.formatPullRequestIssueComments(issueComments);
           }
-          output += this.formatterService.formatPullRequestIssueComments(issueComments);
-        }
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: output,
-            },
-          ],
-        };
+          return {
+            content: [
+              {
+                type: "text",
+                text: output,
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "list pull request comments"),
+              },
+            ],
+            isError: true,
+          };
+        }
       }
     );
 
@@ -453,32 +559,39 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const details = await api.listPullRequestsWithDetails({
+            owner: args.owner,
+            repo: args.repo,
+            state: args.state,
+            head: args.head,
+            base: args.base,
+            sort: args.sort,
+            direction: args.direction,
+            per_page: args.per_page,
+            page: args.page
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatPullRequestListWithDetails(details),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "list pull requests with details"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const details = await this.apiService.listPullRequestsWithDetails({
-          owner: args.owner,
-          repo: args.repo,
-          state: args.state,
-          head: args.head,
-          base: args.base,
-          sort: args.sort,
-          direction: args.direction,
-          per_page: args.per_page,
-          page: args.page
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatPullRequestListWithDetails(details),
-            },
-          ],
-        };
       }
     );
 
@@ -497,37 +610,45 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+
+          // Get the original comment first
+          const originalComment = await api.getComment({
+            owner: args.owner,
+            repo: args.repo,
+            comment_id: args.comment_id,
+            comment_type: args.comment_type || 'issue'
+          });
+
+          // Create the reply
+          const reply = await api.replyToComment({
+            owner: args.owner,
+            repo: args.repo,
+            comment_id: args.comment_id,
+            body: args.body,
+            comment_type: args.comment_type || 'issue'
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatCommentReply(reply, originalComment),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "reply to comment"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        // Get the original comment first
-        const originalComment = await this.apiService.getComment({
-          owner: args.owner,
-          repo: args.repo,
-          comment_id: args.comment_id,
-          comment_type: args.comment_type || 'issue'
-        });
-
-        // Create the reply
-        const reply = await this.apiService.replyToComment({
-          owner: args.owner,
-          repo: args.repo,
-          comment_id: args.comment_id,
-          body: args.body,
-          comment_type: args.comment_type || 'issue'
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatCommentReply(reply, originalComment),
-            },
-          ],
-        };
       }
     );
 
@@ -545,27 +666,34 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const comment = await api.getComment({
+            owner: args.owner,
+            repo: args.repo,
+            comment_id: args.comment_id,
+            comment_type: args.comment_type || 'issue'
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatComment(comment, args.comment_type || 'issue'),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "get comment"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const comment = await this.apiService.getComment({
-          owner: args.owner,
-          repo: args.repo,
-          comment_id: args.comment_id,
-          comment_type: args.comment_type || 'issue'
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatComment(comment, args.comment_type || 'issue'),
-            },
-          ],
-        };
       }
     );
 
@@ -584,28 +712,35 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api, formatter } = await this.ensureServices();
+          const comment = await api.updateComment({
+            owner: args.owner,
+            repo: args.repo,
+            comment_id: args.comment_id,
+            body: args.body,
+            comment_type: args.comment_type || 'issue'
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatter.formatCommentUpdate(comment),
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "update comment"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        const comment = await this.apiService.updateComment({
-          owner: args.owner,
-          repo: args.repo,
-          comment_id: args.comment_id,
-          body: args.body,
-          comment_type: args.comment_type || 'issue'
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: this.formatterService.formatCommentUpdate(comment),
-            },
-          ],
-        };
       }
     );
 
@@ -623,27 +758,34 @@ export class GitHubServer {
         }
       },
       async (args: any) => {
-        await this.initializeServices();
-        
-        if (!this.apiService || !this.formatterService) {
-          throw new Error("Services not initialized");
+        try {
+          const { api } = await this.ensureServices();
+          await api.deleteComment({
+            owner: args.owner,
+            repo: args.repo,
+            comment_id: args.comment_id,
+            comment_type: args.comment_type || 'issue'
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Comment #${args.comment_id} has been successfully deleted.`,
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: this.formatError(error, "delete comment"),
+              },
+            ],
+            isError: true,
+          };
         }
-
-        await this.apiService.deleteComment({
-          owner: args.owner,
-          repo: args.repo,
-          comment_id: args.comment_id,
-          comment_type: args.comment_type || 'issue'
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Comment #${args.comment_id} has been successfully deleted.`,
-            },
-          ],
-        };
       }
     );
 

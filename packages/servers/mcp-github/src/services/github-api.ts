@@ -2,14 +2,11 @@
  * GitHub API service
  */
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
-import { 
-  GitHubRepository, 
-  GitHubUser, 
-  GitHubIssue, 
-  GitHubPullRequest, 
-  GitHubCommit, 
-  GitHubBranch, 
-  GitHubRelease 
+import {
+  GitHubRepository,
+  GitHubUser,
+  GitHubIssue,
+  GitHubPullRequest
 } from '../models/github.js';
 import { ConfigService } from './config-service.js';
 
@@ -38,14 +35,6 @@ export class GitHubApiService {
    */
   async getCurrentUser(): Promise<GitHubUser> {
     const response: AxiosResponse<GitHubUser> = await this.client.get('/user');
-    return response.data;
-  }
-
-  /**
-   * Get user by username
-   */
-  async getUser(args: { username: string }): Promise<GitHubUser> {
-    const response: AxiosResponse<GitHubUser> = await this.client.get(`/users/${args.username}`);
     return response.data;
   }
 
@@ -90,51 +79,6 @@ export class GitHubApiService {
   }
 
   /**
-   * Create repository
-   */
-  async createRepository(args: {
-    name: string;
-    description?: string;
-    private?: boolean;
-    auto_init?: boolean;
-    gitignore_template?: string;
-    license_template?: string;
-    allow_squash_merge?: boolean;
-    allow_merge_commit?: boolean;
-    allow_rebase_merge?: boolean;
-  }): Promise<GitHubRepository> {
-    const response: AxiosResponse<GitHubRepository> = await this.client.post('/user/repos', args);
-    return response.data;
-  }
-
-  /**
-   * Update repository
-   */
-  async updateRepository(args: {
-    owner: string;
-    repo: string;
-    name?: string;
-    description?: string;
-    private?: boolean;
-    default_branch?: string;
-    allow_squash_merge?: boolean;
-    allow_merge_commit?: boolean;
-    allow_rebase_merge?: boolean;
-    archived?: boolean;
-  }): Promise<GitHubRepository> {
-    const { owner, repo, ...updateData } = args;
-    const response: AxiosResponse<GitHubRepository> = await this.client.patch(`/repos/${owner}/${repo}`, updateData);
-    return response.data;
-  }
-
-  /**
-   * Delete repository
-   */
-  async deleteRepository(args: { owner: string; repo: string }): Promise<void> {
-    await this.client.delete(`/repos/${args.owner}/${args.repo}`);
-  }
-
-  /**
    * List issues
    */
   async listIssues(args: {
@@ -171,14 +115,6 @@ export class GitHubApiService {
   }
 
   /**
-   * Get issue
-   */
-  async getIssue(args: { owner: string; repo: string; issue_number: number }): Promise<GitHubIssue> {
-    const response: AxiosResponse<GitHubIssue> = await this.client.get(`/repos/${args.owner}/${args.repo}/issues/${args.issue_number}`);
-    return response.data;
-  }
-
-  /**
    * Create issue
    */
   async createIssue(args: {
@@ -192,25 +128,6 @@ export class GitHubApiService {
   }): Promise<GitHubIssue> {
     const { owner, repo, ...issueData } = args;
     const response: AxiosResponse<GitHubIssue> = await this.client.post(`/repos/${owner}/${repo}/issues`, issueData);
-    return response.data;
-  }
-
-  /**
-   * Update issue
-   */
-  async updateIssue(args: {
-    owner: string;
-    repo: string;
-    issue_number: number;
-    title?: string;
-    body?: string;
-    state?: 'open' | 'closed';
-    assignees?: string[];
-    milestone?: number | null;
-    labels?: string[];
-  }): Promise<GitHubIssue> {
-    const { owner, repo, issue_number, ...updateData } = args;
-    const response: AxiosResponse<GitHubIssue> = await this.client.patch(`/repos/${owner}/${repo}/issues/${issue_number}`, updateData);
     return response.data;
   }
 
@@ -284,144 +201,6 @@ export class GitHubApiService {
   }): Promise<GitHubPullRequest> {
     const { owner, repo, pull_number, ...updateData } = args;
     const response: AxiosResponse<GitHubPullRequest> = await this.client.patch(`/repos/${owner}/${repo}/pulls/${pull_number}`, updateData);
-    return response.data;
-  }
-
-  /**
-   * Merge pull request
-   */
-  async mergePullRequest(args: {
-    owner: string;
-    repo: string;
-    pull_number: number;
-    commit_title?: string;
-    commit_message?: string;
-    merge_method?: 'merge' | 'squash' | 'rebase';
-  }): Promise<{ sha: string; merged: boolean; message: string }> {
-    const { owner, repo, pull_number, ...mergeData } = args;
-    const response = await this.client.put(`/repos/${owner}/${repo}/pulls/${pull_number}/merge`, mergeData);
-    return response.data;
-  }
-
-  /**
-   * List commits
-   */
-  async listCommits(args: {
-    owner: string;
-    repo: string;
-    sha?: string;
-    path?: string;
-    author?: string;
-    since?: string;
-    until?: string;
-    per_page?: number;
-    page?: number;
-  }): Promise<GitHubCommit[]> {
-    const params = {
-      sha: args.sha,
-      path: args.path,
-      author: args.author,
-      since: args.since,
-      until: args.until,
-      per_page: args.per_page || 30,
-      page: args.page || 1
-    };
-
-    const response: AxiosResponse<GitHubCommit[]> = await this.client.get(`/repos/${args.owner}/${args.repo}/commits`, { params });
-    return response.data;
-  }
-
-  /**
-   * Get commit
-   */
-  async getCommit(args: { owner: string; repo: string; ref: string }): Promise<GitHubCommit> {
-    const response: AxiosResponse<GitHubCommit> = await this.client.get(`/repos/${args.owner}/${args.repo}/commits/${args.ref}`);
-    return response.data;
-  }
-
-  /**
-   * List branches
-   */
-  async listBranches(args: {
-    owner: string;
-    repo: string;
-    protected?: boolean;
-    per_page?: number;
-    page?: number;
-  }): Promise<GitHubBranch[]> {
-    const params = {
-      protected: args.protected,
-      per_page: args.per_page || 30,
-      page: args.page || 1
-    };
-
-    const response: AxiosResponse<GitHubBranch[]> = await this.client.get(`/repos/${args.owner}/${args.repo}/branches`, { params });
-    return response.data;
-  }
-
-  /**
-   * Get branch
-   */
-  async getBranch(args: { owner: string; repo: string; branch: string }): Promise<GitHubBranch> {
-    const response: AxiosResponse<GitHubBranch> = await this.client.get(`/repos/${args.owner}/${args.repo}/branches/${args.branch}`);
-    return response.data;
-  }
-
-  /**
-   * List releases
-   */
-  async listReleases(args: {
-    owner: string;
-    repo: string;
-    per_page?: number;
-    page?: number;
-  }): Promise<GitHubRelease[]> {
-    const params = {
-      per_page: args.per_page || 30,
-      page: args.page || 1
-    };
-
-    const response: AxiosResponse<GitHubRelease[]> = await this.client.get(`/repos/${args.owner}/${args.repo}/releases`, { params });
-    return response.data;
-  }
-
-  /**
-   * Get release
-   */
-  async getRelease(args: { owner: string; repo: string; release_id: number }): Promise<GitHubRelease> {
-    const response: AxiosResponse<GitHubRelease> = await this.client.get(`/repos/${args.owner}/${args.repo}/releases/${args.release_id}`);
-    return response.data;
-  }
-
-  /**
-   * Create release
-   */
-  async createRelease(args: {
-    owner: string;
-    repo: string;
-    tag_name: string;
-    target_commitish?: string;
-    name?: string;
-    body?: string;
-    draft?: boolean;
-    prerelease?: boolean;
-  }): Promise<GitHubRelease> {
-    const { owner, repo, ...releaseData } = args;
-    const response: AxiosResponse<GitHubRelease> = await this.client.post(`/repos/${owner}/${repo}/releases`, releaseData);
-    return response.data;
-  }
-
-  /**
-   * Add comment to issue or pull request
-   */
-  async addComment(args: {
-    owner: string;
-    repo: string;
-    issue_number: number;
-    body: string;
-  }): Promise<any> {
-    const { owner, repo, issue_number, body } = args;
-    const response = await this.client.post(`/repos/${owner}/${repo}/issues/${issue_number}/comments`, { body });
     return response.data;
   }
 
@@ -564,19 +343,6 @@ export class GitHubApiService {
     };
 
     const response = await this.client.get(`/repos/${args.owner}/${args.repo}/pulls/${args.pull_number}/reviews`, { params });
-    return response.data;
-  }
-
-  /**
-   * Get a specific review for a pull request
-   */
-  async getPullRequestReview(args: {
-    owner: string;
-    repo: string;
-    pull_number: number;
-    review_id: number;
-  }): Promise<any> {
-    const response = await this.client.get(`/repos/${args.owner}/${args.repo}/pulls/${args.pull_number}/reviews/${args.review_id}`);
     return response.data;
   }
 

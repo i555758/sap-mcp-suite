@@ -1,5 +1,10 @@
 import axios, { AxiosError } from "axios";
-import { CookieStore } from "./cookie-storage.js";
+import {
+  AuthManager,
+  AuthError,
+  AuthExpiredError,
+  AuthNotConfiguredError,
+} from "@anthropic/sap-auth";
 
 // Custom error for auth redirect detection
 class AuthRedirectError extends Error {
@@ -10,13 +15,20 @@ class AuthRedirectError extends Error {
 }
 
 /**
+ * Check if an error is a network connectivity error
+ */
+function isNetworkError(error: any): boolean {
+  return error?.code === "ECONNREFUSED" || error?.code === "ETIMEDOUT";
+}
+
+/**
  * Pure HTTP Client for Wiki - No Browser Dependencies
- * Supports both PAT authentication and cookie-based authentication
+ * Supports both PAT authentication and cookie-based authentication via @anthropic/sap-auth
  * Designed for non-long-running MCP instances
  */
 export class PureWikiHttpClient {
   private httpClient: any;
-  private cookieStore?: CookieStore;
+  private authManager: AuthManager;
   private readonly WIKI_DOMAIN: string;
   private readonly BASE_URL: string;
   private readonly apiToken?: string;
@@ -27,10 +39,7 @@ export class PureWikiHttpClient {
     this.BASE_URL = `https://${this.WIKI_DOMAIN}`;
     this.apiToken = apiToken;
     this.usePATAuth = !!apiToken;
-
-    if (!this.usePATAuth) {
-      this.cookieStore = new CookieStore(this.WIKI_DOMAIN);
-    }
+    this.authManager = AuthManager.getInstance();
 
     const headers: any = {
       accept: "*/*",
@@ -121,43 +130,51 @@ export class PureWikiHttpClient {
       console.log("PAT authentication enabled, skipping cookie loading");
       return { cookieLoaded: false };
     }
-    return await this.reloadCookies();
+    return await this.loadAuthCredentials();
   }
 
   async reloadCookies(): Promise<{ cookieLoaded: boolean }> {
     if (this.usePATAuth) {
       return { cookieLoaded: false };
     }
-
-    try {
-      const cookieInfo = await this.cookieStore!.getStorageInfo();
-      if (!cookieInfo.exists) {
-        console.log("No stored cookies found - authentication required");
-        return { cookieLoaded: false };
-      }
-
-      const storedCookies = await this.cookieStore!.loadCookies();
-      if (storedCookies && storedCookies.length > 0) {
-        const cookieString = storedCookies
-          .map((cookie) => `${cookie.name}=${cookie.value}`)
-          .join("; ");
-        this.httpClient.defaults.headers.common["Cookie"] = cookieString;
-        console.log(`Loaded ${storedCookies.length} cookies from storage`);
-        return { cookieLoaded: true };
-      }
-      return { cookieLoaded: false };
-    } catch (error) {
-      console.error("Cookie initialization failed:", error);
-      return { cookieLoaded: false };
-    }
+    return await this.loadAuthCredentials();
   }
 
-  async quickAuthTest(): Promise<boolean> {
+  /**
+   * Load credentials from AuthManager (shared auth package)
+   */
+  private async loadAuthCredentials(): Promise<{ cookieLoaded: boolean }> {
     try {
-      const response = await this.httpClient.get("/rest/api/user/current");
-      return response.status === 200;
-    } catch (error: any) {
-      return false;
+      const creds = await this.authManager.getCredentials("wiki");
+
+      if (creds.type === "cookie") {
+        this.httpClient.defaults.headers.common["Cookie"] = creds.value;
+        console.log("Loaded cookies from shared auth storage");
+        return { cookieLoaded: true };
+      } else if (creds.type === "bearer") {
+        this.httpClient.defaults.headers.common["Authorization"] =
+          `Bearer ${creds.value}`;
+        console.log("Loaded bearer token from shared auth storage");
+        return { cookieLoaded: true };
+      }
+
+      return { cookieLoaded: false };
+    } catch (error) {
+      if (
+        error instanceof AuthExpiredError ||
+        error instanceof AuthNotConfiguredError
+      ) {
+        console.log(
+          `Authentication required: ${error instanceof AuthExpiredError ? "expired" : "not configured"}`,
+        );
+        return { cookieLoaded: false };
+      }
+      if (error instanceof AuthError) {
+        console.error("Auth error:", error.message);
+        return { cookieLoaded: false };
+      }
+      console.error("Cookie initialization failed:", error);
+      return { cookieLoaded: false };
     }
   }
 
@@ -257,7 +274,7 @@ export class PureWikiHttpClient {
           "Invalid CQL query syntax";
         throw new Error(`CQL_SYNTAX_ERROR: ${errorMsg}`);
       }
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+      if (isNetworkError(error)) {
         throw new Error("NETWORK_ERROR");
       }
       throw new Error(
@@ -291,7 +308,7 @@ export class PureWikiHttpClient {
       if (error.response?.status === 403) {
         throw new Error("ACCESS_FORBIDDEN");
       }
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+      if (isNetworkError(error)) {
         throw new Error("NETWORK_ERROR");
       }
       throw new Error(`HTTP_ERROR: ${error.response?.status || "Unknown"}`);
@@ -335,7 +352,7 @@ export class PureWikiHttpClient {
       if (error.response?.status === 404) {
         throw new Error("PAGE_NOT_FOUND");
       }
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+      if (isNetworkError(error)) {
         throw new Error("NETWORK_ERROR");
       }
       throw new Error(`CONTENT_FETCH_ERROR: ${error.message}`);
@@ -415,7 +432,23 @@ export class PureWikiHttpClient {
         filePath: "N/A (using PAT authentication)",
       };
     }
-    return await this.cookieStore!.getStorageInfo();
+
+    try {
+      const status = await this.authManager.getStatus("wiki");
+      return {
+        exists: status.configured,
+        valid: status.valid,
+        filePath: this.authManager.getStoragePath(),
+        expiresAt: status.expiresAt,
+        expiresInMinutes: status.expiresInMinutes,
+      };
+    } catch (error) {
+      return {
+        exists: false,
+        valid: false,
+        filePath: this.authManager.getStoragePath(),
+      };
+    }
   }
 
   isUsingPATAuth(): boolean {
@@ -464,7 +497,7 @@ export class PureWikiHttpClient {
       if (error.response?.status === 403) {
         throw new Error("ACCESS_FORBIDDEN");
       }
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+      if (isNetworkError(error)) {
         throw new Error("NETWORK_ERROR");
       }
       throw new Error(`GET_PAGE_ERROR: ${error.message}`);
@@ -547,7 +580,7 @@ export class PureWikiHttpClient {
         const errorMsg = error.response?.data?.message || "Invalid content format";
         throw new Error(`INVALID_CONTENT: ${errorMsg}`);
       }
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+      if (isNetworkError(error)) {
         throw new Error("NETWORK_ERROR");
       }
       throw new Error(`UPDATE_PAGE_ERROR: ${error.message}`);
@@ -631,7 +664,7 @@ export class PureWikiHttpClient {
       if (error.response?.status === 404) {
         throw new Error(`SPACE_NOT_FOUND: Space "${spaceKey}" does not exist or you don't have access to it`);
       }
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+      if (isNetworkError(error)) {
         throw new Error("NETWORK_ERROR");
       }
       throw new Error(`CREATE_PAGE_ERROR: ${error.message}`);
@@ -667,7 +700,7 @@ export class PureWikiHttpClient {
       if (error.response?.status === 404) {
         throw new Error(`PAGE_NOT_FOUND: Page "${pageId}" does not exist`);
       }
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
+      if (isNetworkError(error)) {
         throw new Error("NETWORK_ERROR");
       }
       throw new Error(`DELETE_PAGE_ERROR: ${error.message}`);

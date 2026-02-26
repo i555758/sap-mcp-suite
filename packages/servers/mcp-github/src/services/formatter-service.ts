@@ -1,14 +1,11 @@
 /**
  * Formatter service for GitHub MCP server
  */
-import { 
-  GitHubRepository, 
-  GitHubUser, 
-  GitHubIssue, 
-  GitHubPullRequest, 
-  GitHubCommit, 
-  GitHubBranch, 
-  GitHubRelease
+import {
+  GitHubRepository,
+  GitHubUser,
+  GitHubIssue,
+  GitHubPullRequest
 } from '../models/github.js';
 import { ConfigService } from './config-service.js';
 
@@ -291,93 +288,6 @@ export class FormatterService {
     if (pr.body) {
       output += `\n**Description:**\n${pr.body}\n`;
     }
-
-    return output;
-  }
-
-  /**
-   * Format commit list
-   */
-  formatCommitList(commits: GitHubCommit[]): string {
-    if (commits.length === 0) {
-      return 'No commits found.';
-    }
-
-    let output = `Found ${commits.length} commits:\n\n`;
-    
-    commits.forEach(commit => {
-      output += `**${commit.sha.substring(0, 7)}** ${commit.commit.message.split('\n')[0]}\n`;
-      output += `  Author: ${commit.commit.author.name} <${commit.commit.author.email}>\n`;
-      output += `  Date: ${new Date(commit.commit.author.date).toLocaleDateString()}\n`;
-      output += `  URL: ${commit.html_url}\n\n`;
-    });
-
-    return output;
-  }
-
-  /**
-   * Format single commit
-   */
-  formatCommit(commit: GitHubCommit): string {
-    let output = `# Commit ${commit.sha}\n\n`;
-    
-    output += `**Message:**\n${commit.commit.message}\n\n`;
-    output += `**Author:** ${commit.commit.author.name} <${commit.commit.author.email}>\n`;
-    output += `**Date:** ${new Date(commit.commit.author.date).toLocaleDateString()}\n`;
-    
-    if (commit.commit.committer.name !== commit.commit.author.name) {
-      output += `**Committer:** ${commit.commit.committer.name} <${commit.commit.committer.email}>\n`;
-    }
-    
-    if (commit.parents.length > 0) {
-      output += `**Parents:** ${commit.parents.map(parent => parent.sha.substring(0, 7)).join(', ')}\n`;
-    }
-    
-    output += `**Comments:** ${commit.commit.comment_count}\n`;
-    output += `\n**URL:** ${commit.html_url}\n`;
-
-    return output;
-  }
-
-  /**
-   * Format branch list
-   */
-  formatBranchList(branches: GitHubBranch[]): string {
-    if (branches.length === 0) {
-      return 'No branches found.';
-    }
-
-    let output = `Found ${branches.length} branches:\n\n`;
-    
-    branches.forEach(branch => {
-      output += `**${branch.name}**\n`;
-      output += `  Commit: ${branch.commit.sha.substring(0, 7)}\n`;
-      output += `  Protected: ${branch.protected ? 'Yes' : 'No'}\n\n`;
-    });
-
-    return output;
-  }
-
-  /**
-   * Format release list
-   */
-  formatReleaseList(releases: GitHubRelease[]): string {
-    if (releases.length === 0) {
-      return 'No releases found.';
-    }
-
-    let output = `Found ${releases.length} releases:\n\n`;
-    
-    releases.forEach(release => {
-      output += `**${release.name || release.tag_name}**\n`;
-      output += `  Tag: ${release.tag_name}\n`;
-      output += `  Author: ${release.author.login}\n`;
-      output += `  Draft: ${release.draft ? 'Yes' : 'No'}\n`;
-      output += `  Prerelease: ${release.prerelease ? 'Yes' : 'No'}\n`;
-      output += `  Published: ${new Date(release.published_at).toLocaleDateString()}\n`;
-      output += `  Assets: ${release.assets.length}\n`;
-      output += `  URL: ${release.html_url}\n\n`;
-    });
 
     return output;
   }

@@ -1,3 +1,15 @@
+/**
+ * SAP Auth MCP Server
+ *
+ * This MCP provides manual authentication controls to Claude, allowing users to:
+ * - Trigger authentication for SAP systems (wiki, jira, teams, graph)
+ * - Check authentication status
+ * - Clear stored credentials
+ * - Make authenticated requests
+ *
+ * This is a thin wrapper around the shared @anthropic/sap-auth package.
+ */
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -6,18 +18,50 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { SAP_BrowserHybridAuth } from "./browser-hybrid-auth.js";
-import { logger } from "./logger.js";
+import {
+  AuthManager,
+  AuthError,
+  AuthBrowserError,
+  ApiTokenRequiredError,
+} from "@anthropic/sap-auth";
+
+/**
+ * Map URL to provider ID
+ */
+function urlToProviderId(url: string): string | null {
+  const lowerUrl = url.toLowerCase();
+
+  if (lowerUrl.includes("wiki.one.int.sap") || lowerUrl.includes("wiki")) {
+    return "wiki";
+  }
+  if (lowerUrl.includes("jira.tools.sap") || lowerUrl.includes("jira")) {
+    return "jira";
+  }
+  if (
+    lowerUrl.includes("teams.microsoft.com") ||
+    lowerUrl.includes("teams.cloud.microsoft") ||
+    lowerUrl.includes("teams")
+  ) {
+    return "teams";
+  }
+  if (lowerUrl.includes("graph.microsoft.com") || lowerUrl.includes("graph")) {
+    return "graph";
+  }
+
+  return null;
+}
 
 class SAPAuthServer {
   private server: Server;
-  private auth: SAP_BrowserHybridAuth | null = null;
+  private auth: AuthManager;
 
   constructor() {
+    this.auth = AuthManager.getInstance();
+
     this.server = new Server(
       {
         name: "sap-auth-mcp",
-        version: "1.5.0",
+        version: "2.0.0",
       },
       {
         capabilities: {
@@ -27,26 +71,6 @@ class SAPAuthServer {
     );
 
     this.setupToolHandlers();
-    this.setupCleanupHandlers();
-  }
-
-  private setupCleanupHandlers() {
-    const cleanup = async () => {
-      console.error("🧹 MCP Server: Cleaning up browser resources...");
-      if (this.auth) {
-        await this.auth.close();
-        this.auth = null;
-      }
-      process.exit(0);
-    };
-
-    process.on("SIGINT", cleanup);
-    process.on("SIGTERM", cleanup);
-    process.on("exit", async () => {
-      if (this.auth) {
-        await this.auth.close();
-      }
-    });
   }
 
   private setupToolHandlers() {
@@ -65,13 +89,8 @@ class SAPAuthServer {
                   description:
                     "SAP system entry URL (e.g., https://jira.tools.sap/, https://wiki.one.int.sap/)",
                 },
-                store_path: {
-                  type: "string",
-                  description:
-                    "Directory path where to store sap_cookies.json file",
-                },
               },
-              required: ["entry_url", "store_path"],
+              required: ["entry_url"],
             },
           },
           {
@@ -103,30 +122,18 @@ class SAPAuthServer {
           },
           {
             name: "sap_get_cookie_info",
-            description: "Get information about stored authentication cookies",
+            description: "Get information about stored authentication credentials",
             inputSchema: {
               type: "object",
-              properties: {
-                store_path: {
-                  type: "string",
-                  description:
-                    "Directory path where sap_cookies.json is stored (optional, uses default if not provided)",
-                },
-              },
+              properties: {},
             },
           },
           {
             name: "sap_clear_cookies",
-            description: "Clear stored authentication cookies",
+            description: "Clear stored authentication credentials",
             inputSchema: {
               type: "object",
-              properties: {
-                store_path: {
-                  type: "string",
-                  description:
-                    "Directory path where sap_cookies.json is stored (optional, uses default if not provided)",
-                },
-              },
+              properties: {},
             },
           },
         ],
@@ -139,54 +146,166 @@ class SAPAuthServer {
       try {
         switch (name) {
           case "sap_authenticate": {
-            const entryUrl = args?.entry_url;
-            const storePath = args?.store_path;
+            const entryUrl = args?.entry_url as string;
 
-            if (!entryUrl || !storePath) {
+            if (!entryUrl) {
               throw new McpError(
                 ErrorCode.InvalidRequest,
-                "Both entry_url and store_path are required parameters",
+                "entry_url is required",
               );
             }
 
-            this.auth = new SAP_BrowserHybridAuth(
-              entryUrl as string,
-              storePath as string,
-            );
-            await this.auth.initialize();
+            // Map URL to provider ID
+            const providerId = urlToProviderId(entryUrl);
+            if (!providerId) {
+              throw new McpError(
+                ErrorCode.InvalidRequest,
+                `Unknown SAP system URL: ${entryUrl}. Supported: wiki.one.int.sap, jira.tools.sap, teams.microsoft.com`,
+              );
+            }
 
-            const success = await this.auth.authenticateWithHybridMode();
+            try {
+              // Force re-authentication
+              const credentials = await this.auth.forceReauth(providerId);
 
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: success
-                    ? `✅ Successfully authenticated with ${entryUrl}\n📁 Cookie saved to: ${storePath}/sap_cookies.json`
-                    : `❌ Authentication failed with ${entryUrl}`,
-                },
-              ],
-            };
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      `Successfully authenticated with ${providerId} (${entryUrl})\n` +
+                      `Credential type: ${credentials.type}\n` +
+                      `Expires: ${credentials.expiresAt ? credentials.expiresAt.toISOString() : "N/A"}\n` +
+                      `Storage: ${this.auth.getStoragePath()}`,
+                  },
+                ],
+              };
+            } catch (error) {
+              if (error instanceof AuthBrowserError) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Authentication failed for ${providerId}: ${error.message}`,
+                    },
+                  ],
+                };
+              }
+              if (error instanceof ApiTokenRequiredError) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `API token required for ${providerId}:\n${error.instructions}`,
+                    },
+                  ],
+                };
+              }
+              throw error;
+            }
           }
 
           case "sap_make_request": {
-            if (!this.auth) {
+            const { url, method = "GET", headers = {}, body } = args || {};
+
+            if (!url) {
               throw new McpError(
                 ErrorCode.InvalidRequest,
-                "No active authentication session. Please run sap_authenticate first.",
+                "URL is required for sap_make_request",
               );
             }
 
-            const { url, method = "GET", headers = {}, body } = args || {};
-            const options: any = { method, headers };
-            if (body) {
-              options.body = body;
+            // Determine provider from URL
+            const providerId = urlToProviderId(url as string);
+            if (!providerId) {
+              throw new McpError(
+                ErrorCode.InvalidRequest,
+                `Cannot determine provider for URL: ${url}`,
+              );
             }
 
-            const result = await this.auth.makeAuthenticatedRequest(
-              url as string,
-              options,
-            );
+            try {
+              // Get credentials for this provider
+              const credentials = await this.auth.getCredentials(providerId);
+
+              // Build request headers
+              const requestHeaders: Record<string, string> = {
+                ...(headers as Record<string, string>),
+              };
+
+              if (credentials.type === "cookie") {
+                requestHeaders["Cookie"] = credentials.value;
+              } else if (
+                credentials.type === "bearer" ||
+                credentials.type === "api-token"
+              ) {
+                requestHeaders["Authorization"] = `Bearer ${credentials.value}`;
+              }
+
+              // Make the request
+              const fetchOptions: RequestInit = {
+                method: method as string,
+                headers: requestHeaders,
+              };
+
+              if (body && (method === "POST" || method === "PUT" || method === "PATCH")) {
+                fetchOptions.body = JSON.stringify(body);
+                requestHeaders["Content-Type"] = "application/json";
+              }
+
+              const response = await fetch(url as string, fetchOptions);
+              const responseText = await response.text();
+
+              let responseData: unknown;
+              try {
+                responseData = JSON.parse(responseText);
+              } catch {
+                responseData = responseText;
+              }
+
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: Object.fromEntries(response.headers.entries()),
+                        data: responseData,
+                      },
+                      null,
+                      2,
+                    ),
+                  },
+                ],
+              };
+            } catch (error) {
+              if (error instanceof AuthError) {
+                throw new McpError(
+                  ErrorCode.InternalError,
+                  `Authentication error: ${error.message}. Please run sap_authenticate first.`,
+                );
+              }
+              throw error;
+            }
+          }
+
+          case "sap_get_cookie_info": {
+            const statuses = await this.auth.listProviders();
+            const storagePath = this.auth.getStoragePath();
+
+            const result = {
+              storagePath,
+              providers: statuses.map((status) => ({
+                providerId: status.providerId,
+                configured: status.configured,
+                valid: status.valid,
+                method: status.method,
+                expiresAt: status.expiresAt?.toISOString() || null,
+                expiresInMinutes: status.expiresInMinutes,
+              })),
+            };
 
             return {
               content: [
@@ -198,43 +317,14 @@ class SAPAuthServer {
             };
           }
 
-          case "sap_get_cookie_info": {
-            const storePath = args?.store_path;
-
-            // Create a temporary auth instance for cookie operations
-            const tempAuth = new SAP_BrowserHybridAuth(
-              "https://wiki.one.int.sap/",
-              storePath as string | undefined,
-            );
-            const info = await tempAuth.getCookieStorageInfo();
-
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(info, null, 2),
-                },
-              ],
-            };
-          }
-
           case "sap_clear_cookies": {
-            const storePath = args?.store_path;
-
-            // Create a temporary auth instance for cookie operations
-            const tempAuth = new SAP_BrowserHybridAuth(
-              "https://wiki.one.int.sap/",
-              storePath as string | undefined,
-            );
-            await tempAuth.clearStoredCookies();
+            await this.auth.clearAll();
 
             return {
               content: [
                 {
                   type: "text",
-                  text: storePath
-                    ? `✅ Cleared stored authentication cookies from: ${storePath}/sap_cookies.json`
-                    : "✅ Cleared stored authentication cookies from default location",
+                  text: `Cleared all stored authentication credentials from: ${this.auth.getStoragePath()}`,
                 },
               ],
             };
@@ -247,6 +337,9 @@ class SAPAuthServer {
             );
         }
       } catch (error) {
+        if (error instanceof McpError) {
+          throw error;
+        }
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error occurred";
         throw new McpError(ErrorCode.InternalError, errorMessage);
@@ -258,6 +351,7 @@ class SAPAuthServer {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error("SAP Auth MCP server running on stdio");
+    console.error(`Auth storage: ${this.auth.getStoragePath()}`);
   }
 }
 

@@ -16,7 +16,6 @@ import {
   GetTransitionsRequest,
   UpdateTransitionRequest,
   JiraTemplate,
-  StoredCookie,
 } from "../models/types.js";
 import { ConfigService } from "./config-service.js";
 import { AuthManager } from "./auth-manager.js";
@@ -80,31 +79,27 @@ export class JiraApiService {
       },
     });
 
-    // Always register request interceptor as fallback
+    // Always register request interceptor for auth handling
     logger.info("[initializeApiClient] Registering request interceptor");
     this.axiosInstance.interceptors.request.use(async (config) => {
       logger.debug(
         `[Interceptor] Request to ${config.method?.toUpperCase()} ${config.url}`,
       );
 
-      // Only load cookies from disk if header doesn't have them
-      if (!config.headers["Cookie"]) {
-        logger.debug("[Interceptor] No cookies in header, loading from disk");
-        const currentCookies = await this.authManager.getCookies();
+      // Get auth headers from the auth manager (handles both cookie and API token auth)
+      try {
+        const authHeaders = await this.authManager.getAuthHeaders();
 
-        if (currentCookies && currentCookies.length > 0) {
-          const cookieString = currentCookies
-            .map((cookie: StoredCookie) => `${cookie.name}=${cookie.value}`)
-            .join("; ");
-          config.headers["Cookie"] = cookieString;
-          logger.debug(
-            `[Interceptor] Loaded ${currentCookies.length} cookies from disk`,
-          );
-        } else {
-          logger.warn("[Interceptor] No cookies found on disk");
+        // Only set auth headers if not already present
+        if (authHeaders.Cookie && !config.headers["Cookie"]) {
+          config.headers["Cookie"] = authHeaders.Cookie;
+          logger.debug("[Interceptor] Set Cookie header from auth manager");
+        } else if (authHeaders.Authorization && !config.headers["Authorization"]) {
+          config.headers["Authorization"] = authHeaders.Authorization;
+          logger.debug("[Interceptor] Set Authorization header from auth manager");
         }
-      } else {
-        logger.debug("[Interceptor] Using existing cookies from header");
+      } catch (error) {
+        logger.warn("[Interceptor] Failed to get auth headers:", error);
       }
 
       // Add CSRF protection headers for write operations
@@ -137,12 +132,18 @@ export class JiraApiService {
         // now only treat 401 as auth issue (cookie is wrong), 403 is authorization issue, will not drop cookie.
         if (error.response && error.response.status === 401) {
           logger.warn(
-            `[Response Interceptor] Auth error ${error.response.status}, clearing cached cookies`,
+            `[Response Interceptor] Auth error ${error.response.status}, clearing cached auth`,
           );
-          // Clear cookies from default headers to force reload on next request
+          // Clear auth from default headers and auth manager
           delete this.axiosInstance.defaults.headers.common["Cookie"];
+          delete this.axiosInstance.defaults.headers.common["Authorization"];
+          try {
+            await this.authManager.clearAuth();
+          } catch (e) {
+            logger.debug("[Response Interceptor] Failed to clear auth:", e);
+          }
           logger.debug(
-            `[Response Interceptor] Cookies cleared from default headers due to auth issue happens`,
+            "[Response Interceptor] Auth cleared from default headers due to auth issue",
           );
         }
         return Promise.reject(error);
@@ -162,32 +163,33 @@ export class JiraApiService {
 
   private async initializeApiClient(): Promise<any> {
     logger.info("[initializeApiClient] Initializing API client");
-    // Determine authentication type based on the input
-    const authType = this.authManager.getAuthType();
 
-    if (authType == "cookies") {
-      logger.info("[initializeApiClient] Using cookie-based authentication");
+    // Get auth headers from the auth manager
+    try {
+      const authHeaders = await this.authManager.getAuthHeaders();
+      const authType = this.authManager.getAuthType();
 
-      // Try to load initial cookies and set as default
-      const storedCookies = await this.authManager.getCookies();
-      if (storedCookies && storedCookies.length > 0) {
-        const cookieString = storedCookies
-          .map((cookie: StoredCookie) => `${cookie.name}=${cookie.value}`)
-          .join("; ");
-        this.axiosInstance.defaults.headers.common["Cookie"] = cookieString;
-        logger.info(
-          `✅ Loaded ${storedCookies.length} cookies into default headers`,
-        );
+      if (authType === "cookies") {
+        logger.info("[initializeApiClient] Using cookie-based authentication");
+        if (authHeaders.Cookie) {
+          this.axiosInstance.defaults.headers.common["Cookie"] = authHeaders.Cookie;
+          logger.info("Loaded cookies into default headers");
+        } else {
+          logger.info("No cookies found initially - will load on first request");
+        }
       } else {
-        logger.info("No cookies found initially - will load on first request");
+        // API token-based authentication
+        logger.info("[initializeApiClient] Using API token authentication");
+        if (authHeaders.Authorization) {
+          this.axiosInstance.defaults.headers.common["Authorization"] = authHeaders.Authorization;
+          logger.info("API Token injected into default headers");
+        }
       }
 
-      logger.info("[initializeApiClient] Interceptors registered successfully");
-    } else {
-      // API token-based authentication
-      this.axiosInstance.defaults.headers.common["Authorization"] =
-        `Bearer ${this.authManager.getApiToken()}`;
-      logger.info(`✅ API Token injected`);
+      logger.info("[initializeApiClient] Auth initialization completed");
+    } catch (error) {
+      logger.warn("[initializeApiClient] Failed to initialize auth headers:", error);
+      logger.info("Auth headers will be loaded on first request via interceptor");
     }
   }
 
@@ -776,19 +778,19 @@ export class JiraApiService {
       // Check for sprint value in multiple possible locations
       if (request.sprint) {
         sprintValueFromRequest = request.sprint;
-        logger.error(`Found sprint in request:`, sprintValueFromRequest);
+        logger.debug(`Found sprint in request:`, sprintValueFromRequest);
       } else if (request.customfield_12740) {
         sprintValueFromRequest = request.customfield_12740;
-        logger.error(
+        logger.debug(
           `Found customfield_12740 in request:`,
           sprintValueFromRequest,
         );
       } else if (dynamicFields.sprint) {
         sprintValueFromRequest = dynamicFields.sprint;
-        logger.error(`Found sprint in dynamicFields:`, sprintValueFromRequest);
+        logger.debug(`Found sprint in dynamicFields:`, sprintValueFromRequest);
       } else if (dynamicFields.customfield_12740) {
         sprintValueFromRequest = dynamicFields.customfield_12740;
-        logger.error(
+        logger.debug(
           `Found customfield_12740 in dynamicFields:`,
           sprintValueFromRequest,
         );
@@ -1033,13 +1035,13 @@ export class JiraApiService {
           }
         }
 
-        logger.error(
+        logger.debug(
           `Processing user field "${key}" with ID "${fieldId}", metadata found: ${!!metadata}`,
         );
 
         // Skip fields that don't have metadata - they might not be available on the appropriate screen
         if (!metadata) {
-          logger.error(
+          logger.debug(
             `Skipping user field ${key} (mapped to ${fieldId}) as it has no metadata and might not be available on the appropriate screen`,
           );
           continue;
@@ -1082,7 +1084,7 @@ export class JiraApiService {
             labelsArray,
             metadata,
           );
-          logger.error(
+          logger.info(
             `Added user field ${key} (mapped to ${fieldId}) with mcp-jira label included:`,
             fields[fieldId],
           );
@@ -1093,7 +1095,7 @@ export class JiraApiService {
             value,
             metadata,
           );
-          logger.error(
+          logger.info(
             `Added user field ${key} (mapped to ${fieldId}) with formatted value:`,
             fields[fieldId],
           );
@@ -1107,7 +1109,7 @@ export class JiraApiService {
           const epicName = dynamicFields["Epic Name"] || summary;
           if (epicName) {
             fields[epicNameFieldId] = epicName;
-            logger.error(
+            logger.info(
               `Added Epic Name field (${epicNameFieldId}):`,
               epicName,
             );
@@ -1129,7 +1131,7 @@ export class JiraApiService {
           ["mcp-jira"],
           labelsMetadata,
         );
-        logger.error(
+        logger.info(
           `Added default mcp-jira label to labels field:`,
           fields[labelsFieldId],
         );
@@ -1177,7 +1179,7 @@ export class JiraApiService {
 
         // Check if the field is required
         if (metadata.required) {
-          logger.error(
+          logger.debug(
             `Field ${fieldId} (${metadata.name}) is required but missing`,
           );
 
@@ -1193,7 +1195,7 @@ export class JiraApiService {
                 "value" in value
               ) {
                 fieldValue = value.value;
-                logger.error(
+                logger.debug(
                   `Found value for ${fieldId} in template: ${fieldValue}`,
                 );
                 break;
@@ -1203,7 +1205,7 @@ export class JiraApiService {
                 typeof value === "boolean"
               ) {
                 fieldValue = value;
-                logger.error(
+                logger.debug(
                   `Found value for ${fieldId} in template: ${fieldValue}`,
                 );
                 break;
@@ -1226,7 +1228,7 @@ export class JiraApiService {
                       "value" in value
                     ) {
                       fieldValue = value.value;
-                      logger.error(
+                      logger.debug(
                         `Found value for ${fieldId} in other template: ${fieldValue}`,
                       );
                       break;
@@ -1236,7 +1238,7 @@ export class JiraApiService {
                       typeof value === "boolean"
                     ) {
                       fieldValue = value;
-                      logger.error(
+                      logger.debug(
                         `Found value for ${fieldId} in other template: ${fieldValue}`,
                       );
                       break;
@@ -1260,17 +1262,17 @@ export class JiraApiService {
               ) {
                 if ("value" in firstAllowedValue) {
                   fieldValue = firstAllowedValue.value;
-                  logger.error(
+                  logger.debug(
                     `Using first allowed value for ${fieldId}: ${fieldValue}`,
                   );
                 } else if ("name" in firstAllowedValue) {
                   fieldValue = firstAllowedValue.name;
-                  logger.error(
+                  logger.debug(
                     `Using first allowed value for ${fieldId}: ${fieldValue}`,
                   );
                 } else if ("id" in firstAllowedValue) {
                   fieldValue = firstAllowedValue.id;
-                  logger.error(
+                  logger.debug(
                     `Using first allowed value for ${fieldId}: ${fieldValue}`,
                   );
                 }
@@ -1285,12 +1287,12 @@ export class JiraApiService {
               fieldValue,
               metadata,
             );
-            logger.error(
+            logger.info(
               `Added required field ${fieldId} with dynamically determined value:`,
               fields[fieldId],
             );
           } else {
-            logger.error(
+            logger.warn(
               `Could not find a value for required field ${fieldId}`,
             );
           }
@@ -1305,7 +1307,7 @@ export class JiraApiService {
           "value" in value &&
           value.value === ""
         ) {
-          logger.error(`Removing field ${key} with empty string value`);
+          logger.debug(`Removing field ${key} with empty string value`);
           delete fields[key];
         }
       }
@@ -1322,7 +1324,7 @@ export class JiraApiService {
 
       for (const fieldName of problematicFields) {
         if (fields[fieldName]) {
-          logger.error(
+          logger.debug(
             `Removing problematic field '${fieldName}' that may not be on the appropriate screen`,
           );
           delete fields[fieldName];
@@ -1338,11 +1340,11 @@ export class JiraApiService {
 
       // Remove stack field if present
       if (fields.stack) {
-        logger.error("Removing 'stack' field from request");
+        logger.debug("Removing 'stack' field from request");
         delete fields.stack;
       }
       if (fields.Stack) {
-        logger.error("Removing 'Stack' field from request");
+        logger.debug("Removing 'Stack' field from request");
         delete fields.Stack;
       }
 
@@ -1362,12 +1364,12 @@ export class JiraApiService {
 
       // Log the complete request payload before sending
       const requestPayload = { fields };
-      logger.error("[createIssue] Complete request payload:");
-      logger.error(JSON.stringify(requestPayload, null, 2));
-      logger.error(
+      logger.debug("[createIssue] Complete request payload:");
+      logger.debug(JSON.stringify(requestPayload, null, 2));
+      logger.debug(
         `[createIssue] Number of fields in request: ${Object.keys(fields).length}`,
       );
-      logger.error(
+      logger.debug(
         `[createIssue] Field names: ${Object.keys(fields).join(", ")}`,
       );
 
@@ -1387,42 +1389,42 @@ export class JiraApiService {
       // Check for sprint value in different possible locations
       if ((dynamicFields as any)._sprintValue) {
         sprintValueToAssign = (dynamicFields as any)._sprintValue;
-        logger.error(
+        logger.debug(
           `Found sprint value in _sprintValue:`,
           sprintValueToAssign,
         );
       } else if (request.sprint) {
         sprintValueToAssign = request.sprint;
-        logger.error(
+        logger.debug(
           `Found sprint value in request.sprint:`,
           sprintValueToAssign,
         );
       } else if (request.customfield_12740) {
         sprintValueToAssign = request.customfield_12740;
-        logger.error(
+        logger.debug(
           `Found sprint value in request.customfield_12740:`,
           sprintValueToAssign,
         );
       } else if (dynamicFields.sprint) {
         sprintValueToAssign = dynamicFields.sprint;
-        logger.error(
+        logger.debug(
           `Found sprint value in dynamicFields.sprint:`,
           sprintValueToAssign,
         );
       } else if (dynamicFields.customfield_12740) {
         sprintValueToAssign = dynamicFields.customfield_12740;
-        logger.error(
+        logger.debug(
           `Found sprint value in dynamicFields.customfield_12740:`,
           sprintValueToAssign,
         );
       }
 
-      logger.error(`Final sprint value to assign:`, sprintValueToAssign);
-      logger.error(`Request object keys:`, Object.keys(request));
-      logger.error(`Dynamic fields keys:`, Object.keys(dynamicFields));
+      logger.debug(`Final sprint value to assign:`, sprintValueToAssign);
+      logger.debug(`Request object keys:`, Object.keys(request));
+      logger.debug(`Dynamic fields keys:`, Object.keys(dynamicFields));
 
       if (sprintValueToAssign) {
-        logger.error(
+        logger.debug(
           `Attempting post-creation sprint assignment for issue ${createdIssue.key} with sprint value:`,
           sprintValueToAssign,
         );
@@ -1433,7 +1435,7 @@ export class JiraApiService {
             sprintValueToAssign,
           );
           if (sprintId) {
-            logger.error(
+            logger.debug(
               `Assigning issue ${createdIssue.key} to sprint ${sprintId} using Agile API`,
             );
 
@@ -1448,25 +1450,25 @@ export class JiraApiService {
 
             const agileApiUrl = `/rest/agile/1.0/sprint/${sprintId}/issue`;
 
-            logger.error(
+            logger.debug(
               `Making post-creation Agile API call to: ${agileAxios.defaults.baseURL}${agileApiUrl}`,
             );
-            logger.error(`Request payload:`, { issues: [createdIssue.key] });
+            logger.debug(`Request payload:`, { issues: [createdIssue.key] });
 
             const response = await agileAxios.post(agileApiUrl, {
               issues: [createdIssue.key],
             });
 
-            logger.error(
+            logger.debug(
               `Post-creation Agile API response:`,
               response.status,
               response.data,
             );
-            logger.error(
+            logger.info(
               `Successfully assigned issue ${createdIssue.key} to sprint ID ${sprintId} after creation`,
             );
           } else {
-            logger.error(
+            logger.warn(
               `Could not determine sprint ID for value "${sprintValueToAssign}", skipping sprint assignment`,
             );
           }
@@ -1476,7 +1478,7 @@ export class JiraApiService {
             sprintError,
           );
           // Don't fail the entire creation process if sprint assignment fails
-          logger.error(
+          logger.warn(
             `Issue ${createdIssue.key} was created successfully but sprint assignment failed`,
           );
         }
@@ -1759,7 +1761,7 @@ export class JiraApiService {
             value,
             metadata,
           );
-          logger.error(
+          logger.debug(
             `Updated field ${key} (${fieldId}) using metadata-based formatting:`,
             updateData.fields[fieldId],
           );
@@ -1786,7 +1788,7 @@ export class JiraApiService {
                 operations: ["set"], // Assume set operation is available for updates
               };
               fieldId = globalField.id; // Use the correct field ID
-              logger.error(
+              logger.debug(
                 `Found field ${key} in global cache as ${globalField.name} (${globalField.id})`,
               );
             }
@@ -1799,7 +1801,7 @@ export class JiraApiService {
               value,
               globalFieldMetadata,
             );
-            logger.error(
+            logger.debug(
               `Updated field ${key} (${fieldId}) using global field metadata:`,
               updateData.fields[fieldId],
             );
@@ -1843,7 +1845,7 @@ export class JiraApiService {
                       value,
                       templateMetadata,
                     );
-                  logger.error(
+                  logger.debug(
                     `Updated field ${key} using template field ${templateKey} with metadata:`,
                     updateData.fields[templateFieldId],
                   );
@@ -1863,7 +1865,7 @@ export class JiraApiService {
                   } else {
                     updateData.fields[templateFieldId] = value;
                   }
-                  logger.error(
+                  logger.debug(
                     `Updated field ${key} using template field ${templateKey} structure:`,
                     updateData.fields[templateFieldId],
                   );
@@ -1876,7 +1878,7 @@ export class JiraApiService {
 
             // If no template structure found, use intelligent defaults based on field type
             if (!templateStructureFound) {
-              logger.error(
+              logger.debug(
                 `No metadata or template found for field ${key} (${fieldId}), using intelligent defaults`,
               );
 
@@ -1956,7 +1958,7 @@ export class JiraApiService {
                     // Use default structure
                     updateData.fields[fieldId] = { value };
                   }
-                  logger.error(
+                  logger.debug(
                     `Updated custom field ${key} (${fieldId}) using template structure:`,
                     updateData.fields[fieldId],
                   );
@@ -1972,14 +1974,14 @@ export class JiraApiService {
                     updateData.fields[fieldId] = values.map((v) => ({
                       value: v,
                     }));
-                    logger.error(
+                    logger.debug(
                       `Updated custom field ${key} (${fieldId}) as multi-value:`,
                       updateData.fields[fieldId],
                     );
                   } else {
                     // Single value - try both direct value and object format
                     updateData.fields[fieldId] = { value };
-                    logger.error(
+                    logger.debug(
                       `Updated custom field ${key} (${fieldId}) as single value object:`,
                       updateData.fields[fieldId],
                     );
@@ -1988,7 +1990,7 @@ export class JiraApiService {
               } else {
                 // Standard fields - use direct value
                 updateData.fields[fieldId] = value;
-                logger.error(
+                logger.debug(
                   `Updated standard field ${key} (${fieldId}) with direct value:`,
                   updateData.fields[fieldId],
                 );
@@ -2344,7 +2346,7 @@ export class JiraApiService {
         issueTypeId: issueTypeId,
         fields: {},
       };
-      logger.error(
+      logger.debug(
         "getFieldMetadataByName =======>fieldMetadata:",
         JSON.stringify(fieldMetadata, null, 2),
       );
@@ -2549,7 +2551,7 @@ export class JiraApiService {
     } catch (error) {
       // If Agile API fails, try alternative approach using search
       try {
-        logger.error("Agile API failed, trying alternative approach:", error);
+        logger.debug("Agile API failed, trying alternative approach:", error);
 
         // Search for issues in the project that have sprint values
         const searchResponse = await this.axiosInstance.get("/search", {
@@ -2613,7 +2615,7 @@ export class JiraApiService {
     value: any,
   ): Promise<number | null> {
     try {
-      logger.error(`Handling sprint creation with value:`, value);
+      logger.debug(`Handling sprint creation with value:`, value);
 
       // Normalize the value to handle different input formats
       let sprintValue = value;
@@ -2632,13 +2634,13 @@ export class JiraApiService {
         );
         availableSprints = projectSprintValues.values || [];
       } catch (error) {
-        logger.error(
+        logger.debug(
           `Failed to get project sprint values, continuing with direct creation:`,
           error,
         );
       }
 
-      logger.error(
+      logger.debug(
         `Available sprints from API:`,
         availableSprints.map((s: any) => ({ id: s.id, name: s.name })),
       );
@@ -2673,7 +2675,7 @@ export class JiraApiService {
 
         if (matchingSprint) {
           sprintId = matchingSprint.id;
-          logger.error(
+          logger.debug(
             `Found matching sprint: ${matchingSprint.name} (ID: ${sprintId})`,
           );
         }
@@ -2682,17 +2684,17 @@ export class JiraApiService {
       // If no match found but value is numeric, use it as sprint ID
       if (!sprintId && /^\d+$/.test(sprintStr)) {
         sprintId = parseInt(sprintStr);
-        logger.error(`Using numeric value as sprint ID: ${sprintId}`);
+        logger.debug(`Using numeric value as sprint ID: ${sprintId}`);
       }
 
       if (sprintId) {
-        logger.error(
+        logger.debug(
           `Sprint ID ${sprintId} will be assigned after issue creation using Agile API`,
         );
         // Don't set the field during creation - return the sprint ID for post-creation assignment
         return sprintId;
       } else {
-        logger.error(
+        logger.debug(
           `No matching sprint found for "${sprintStr}", sprint will not be assigned`,
         );
         return null;
@@ -2715,7 +2717,7 @@ export class JiraApiService {
     issueKey: string,
   ): Promise<void> {
     try {
-      logger.error(`Handling sprint update for ${issueKey} with value:`, value);
+      logger.debug(`Handling sprint update for ${issueKey} with value:`, value);
 
       // Normalize the value to handle different input formats
       let sprintValue = value;
@@ -2734,13 +2736,13 @@ export class JiraApiService {
         );
         availableSprints = projectSprintValues.values || [];
       } catch (error) {
-        logger.error(
+        logger.debug(
           `Failed to get project sprint values, continuing with direct update:`,
           error,
         );
       }
 
-      logger.error(
+      logger.debug(
         `Available sprints from API:`,
         availableSprints.map((s: any) => ({ id: s.id, name: s.name })),
       );
@@ -2775,7 +2777,7 @@ export class JiraApiService {
 
         if (matchingSprint) {
           sprintId = matchingSprint.id;
-          logger.error(
+          logger.debug(
             `Found matching sprint: ${matchingSprint.name} (ID: ${sprintId})`,
           );
         }
@@ -2784,7 +2786,7 @@ export class JiraApiService {
       // If no match found but value is numeric, use it as sprint ID
       if (!sprintId && /^\d+$/.test(sprintStr)) {
         sprintId = parseInt(sprintStr);
-        logger.error(`Using numeric value as sprint ID: ${sprintId}`);
+        logger.debug(`Using numeric value as sprint ID: ${sprintId}`);
       }
 
       // If no sprint ID found yet, try to extract from complex sprint string format
@@ -2810,7 +2812,7 @@ export class JiraApiService {
                   sprintStr.toLowerCase().includes(extractedName.toLowerCase())
                 ) {
                   sprintId = extractedId;
-                  logger.error(
+                  logger.debug(
                     `Extracted sprint ID from complex string for "${sprintStr}": ${sprintId} (name: ${extractedName})`,
                   );
                   break;
@@ -2820,7 +2822,7 @@ export class JiraApiService {
               // Also check if the sprint ID matches directly
               if (extractedId.toString() === sprintStr) {
                 sprintId = extractedId;
-                logger.error(
+                logger.debug(
                   `Found matching sprint ID in complex string: ${sprintId}`,
                 );
                 break;
@@ -2846,17 +2848,17 @@ export class JiraApiService {
 
           const agileApiUrl = `/rest/agile/1.0/sprint/${sprintId}/issue`;
 
-          logger.error(
+          logger.debug(
             `Attempting Agile API call to: ${agileAxios.defaults.baseURL}${agileApiUrl}`,
           );
-          logger.error(`Request payload:`, { issues: [issueKey] });
+          logger.debug(`Request payload:`, { issues: [issueKey] });
 
           const response = await agileAxios.post(agileApiUrl, {
             issues: [issueKey],
           });
 
-          logger.error(`Agile API response:`, response.status, response.data);
-          logger.error(
+          logger.debug(`Agile API response:`, response.status, response.data);
+          logger.info(
             `Successfully moved issue ${issueKey} to sprint ID ${sprintId} using Agile API`,
           );
           agileApiSuccess = true;
@@ -2864,7 +2866,7 @@ export class JiraApiService {
           // Don't set the field update since Agile API succeeded
           delete updateData.fields.customfield_12740;
         } catch (agileApiError: any) {
-          logger.error(`Agile API failed for sprint ${sprintId}:`, {
+          logger.debug(`Agile API failed for sprint ${sprintId}:`, {
             status: agileApiError.response?.status,
             statusText: agileApiError.response?.statusText,
             data: agileApiError.response?.data,
@@ -2875,15 +2877,15 @@ export class JiraApiService {
 
         // If Agile API failed, try direct field update as fallback
         if (!agileApiSuccess) {
-          logger.error(
+          logger.debug(
             `Falling back to direct field update for sprint ${sprintId}`,
           );
           updateData.fields.customfield_12740 = [sprintId];
-          logger.error(`Set sprint field to array format: [${sprintId}]`);
+          logger.debug(`Set sprint field to array format: [${sprintId}]`);
         }
       } else {
         // If no numeric ID available, try to use the value directly
-        logger.error(
+        logger.debug(
           `No matching sprint found for "${sprintStr}", attempting direct assignment`,
         );
 
@@ -2893,7 +2895,7 @@ export class JiraApiService {
         } else {
           updateData.fields.customfield_12740 = [sprintStr];
         }
-        logger.error(
+        logger.debug(
           `Set sprint field to direct value:`,
           updateData.fields.customfield_12740,
         );
@@ -2901,7 +2903,7 @@ export class JiraApiService {
     } catch (error) {
       logger.error(`Error handling sprint update:`, error);
       // Don't throw error, just log it and continue with other field updates
-      logger.error(`Sprint update failed, continuing with other field updates`);
+      logger.warn(`Sprint update failed, continuing with other field updates`);
     }
   }
 
@@ -2915,7 +2917,7 @@ export class JiraApiService {
     value: string,
   ): Promise<void> {
     try {
-      logger.error(`Handling fixVersions update with value: ${value}`);
+      logger.debug(`Handling fixVersions update with value: ${value}`);
 
       // Get available versions for the project
       const versionsResponse = await this.axiosInstance.get(
@@ -2953,12 +2955,12 @@ export class JiraApiService {
         updateData.fields.fixVersions = [
           { id: matchingVersion.id, name: matchingVersion.name },
         ];
-        logger.error(
+        logger.debug(
           `Found matching fixVersion: ${matchingVersion.name} (ID: ${matchingVersion.id})`,
         );
       } else {
         // If no match found, create a new version or use as-is
-        logger.error(`No matching fixVersion found for "${value}"`);
+        logger.debug(`No matching fixVersion found for "${value}"`);
 
         // Try to create the version if it doesn't exist
         try {
@@ -2972,7 +2974,7 @@ export class JiraApiService {
           updateData.fields.fixVersions = [
             { id: newVersion.id, name: newVersion.name },
           ];
-          logger.error(
+          logger.info(
             `Created new fixVersion: ${newVersion.name} (ID: ${newVersion.id})`,
           );
         } catch (createError) {
@@ -2998,7 +3000,7 @@ export class JiraApiService {
     value: string,
   ): Promise<void> {
     try {
-      logger.error(`Handling versions update with value: ${value}`);
+      logger.debug(`Handling versions update with value: ${value}`);
 
       // Get available versions for the project
       const versionsResponse = await this.axiosInstance.get(
@@ -3036,12 +3038,12 @@ export class JiraApiService {
         updateData.fields.versions = [
           { id: matchingVersion.id, name: matchingVersion.name },
         ];
-        logger.error(
+        logger.debug(
           `Found matching version: ${matchingVersion.name} (ID: ${matchingVersion.id})`,
         );
       } else {
         // If no match found, create a new version or use as-is
-        logger.error(`No matching version found for "${value}"`);
+        logger.debug(`No matching version found for "${value}"`);
 
         // Try to create the version if it doesn't exist
         try {
@@ -3055,7 +3057,7 @@ export class JiraApiService {
           updateData.fields.versions = [
             { id: newVersion.id, name: newVersion.name },
           ];
-          logger.error(
+          logger.info(
             `Created new version: ${newVersion.name} (ID: ${newVersion.id})`,
           );
         } catch (createError) {
@@ -3079,7 +3081,7 @@ export class JiraApiService {
    */
   async updateIssueSprint(issueKey: string, sprintId: number): Promise<any> {
     try {
-      logger.error(
+      logger.debug(
         `Updating issue ${issueKey} to sprint ${sprintId} using Agile API`,
       );
 
@@ -3094,17 +3096,17 @@ export class JiraApiService {
 
       const agileApiUrl = `/rest/agile/1.0/sprint/${sprintId}/issue`;
 
-      logger.error(
+      logger.debug(
         `Making Agile API call to: ${agileAxios.defaults.baseURL}${agileApiUrl}`,
       );
-      logger.error(`Request payload:`, { issues: [issueKey] });
+      logger.debug(`Request payload:`, { issues: [issueKey] });
 
       const response = await agileAxios.post(agileApiUrl, {
         issues: [issueKey],
       });
 
-      logger.error(`Agile API response:`, response.status, response.data);
-      logger.error(
+      logger.debug(`Agile API response:`, response.status, response.data);
+      logger.info(
         `Successfully moved issue ${issueKey} to sprint ID ${sprintId} using Agile API`,
       );
 
@@ -3116,7 +3118,7 @@ export class JiraApiService {
         apiResponse: response.data,
       };
     } catch (error: any) {
-      logger.error(`Agile API failed for sprint ${sprintId}:`, {
+      logger.debug(`Agile API failed for sprint ${sprintId}:`, {
         status: error.response?.status,
         statusText: error.response?.statusText,
         data: error.response?.data,
@@ -3500,7 +3502,7 @@ export class JiraApiService {
       };
     } catch (error: any) {
       // Fallback to static examples from jql_examples.md if metadata fetch fails
-      logger.error("Failed to fetch dynamic metadata, using fallback:", error);
+      logger.debug("Failed to fetch dynamic metadata, using fallback:", error);
       return {
         examples: [
           {

@@ -1,75 +1,88 @@
-import { promises as fs } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { homedir } from "os";
-import { StoredCookie, CookieStorage } from "../models/types.js";
+/**
+ * Auth Manager - Thin wrapper around shared @anthropic/sap-auth package
+ *
+ * Provides backward-compatible interface for Jira authentication
+ * while delegating all work to the shared auth infrastructure.
+ */
+import {
+  AuthManager as SharedAuthManager,
+  AuthError,
+  ApiTokenRequiredError,
+  type Credentials,
+} from "@anthropic/sap-auth";
 import { logger } from "../utils/logger.js";
 
+// Re-export types and errors that consumers might need
+export { AuthError, ApiTokenRequiredError };
+export type { Credentials };
+
+/**
+ * AuthManager for Jira - thin wrapper around shared auth package
+ */
 export class AuthManager {
-  private cookieFile: string;
-  private cookieDir: string;
-  private apiToken: string;
-  private authType: "api_token" | "cookies";
+  private sharedAuth: SharedAuthManager;
+  private apiToken: string | undefined;
 
-  constructor(apiToken: string | undefined, cookieDir: string | undefined) {
-    if (apiToken) {
-      this.authType = "api_token";
-      this.apiToken = apiToken;
-      this.cookieFile = "";
-      this.cookieDir = "";
-    } else {
-      this.authType = "cookies";
-      this.apiToken = "";
-      if (!cookieDir) {
-        // Use a fixed location in user's home directory
-        // This ensures cookies are shared across different npx runs
-        // ~/.sap-mcp/cookies/
-        cookieDir = join(homedir(), ".sap-mcp", "cookies", "sap-jira");
-      }
-
-      this.cookieDir = cookieDir;
-      // Use standardized filename sap_cookies.json
-      this.cookieFile = join(cookieDir, "sap_cookies.json");
-    }
-  }
-
-  getAuthType(): "api_token" | "cookies" {
-    return this.authType;
-  }
-
-  getApiToken(): string {
-    return this.apiToken;
+  /**
+   * Constructor
+   * @param apiToken Optional API token (from JIRA_API_TOKEN env var)
+   */
+  constructor(apiToken?: string) {
+    this.sharedAuth = SharedAuthManager.getInstance();
+    this.apiToken = apiToken;
   }
 
   /**
-   * Get the directory where cookies are stored
-   * @returns Cookie storage directory path
+   * Initialize the auth manager with API token if provided
+   * Call this after construction to ensure token is set
+   */
+  async initialize(): Promise<void> {
+    if (this.apiToken) {
+      await this.sharedAuth.setApiToken("jira", this.apiToken);
+      logger.info("[AuthManager] API token configured");
+    }
+  }
+
+  /**
+   * Get credentials from the shared auth manager
+   */
+  async getCredentials(): Promise<Credentials> {
+    return this.sharedAuth.getCredentials("jira");
+  }
+
+  /**
+   * Get the auth header for HTTP requests
+   */
+  async getAuthHeaders(): Promise<Record<string, string>> {
+    const creds = await this.getCredentials();
+
+    if (creds.type === "cookie") {
+      return { Cookie: creds.value };
+    }
+    // api-token or bearer
+    return { Authorization: `Bearer ${creds.value}` };
+  }
+
+  /**
+   * Get the authentication type
+   * @returns 'api_token' or 'cookies'
+   */
+  getAuthType(): "api_token" | "cookies" {
+    return this.apiToken ? "api_token" : "cookies";
+  }
+
+  /**
+   * Get the directory where auth credentials are stored
    */
   getCookieDir(): string {
-    return this.cookieDir;
+    return this.sharedAuth.getStoragePath();
   }
 
   /**
-   * Load cookies from storage
+   * Clear cached credentials and force re-authentication
    */
-  async getCookies(): Promise<StoredCookie[] | null> {
-    try {
-      logger.debug(`Attempting to read cookie file: ${this.cookieFile}`);
-      const data = await fs.readFile(this.cookieFile, "utf8");
-      logger.debug(`Cookie file read successful, size: ${data.length} bytes`);
-
-      const cookieStorage: CookieStorage = JSON.parse(data);
-      logger.info(
-        `Loaded ${cookieStorage.cookies.length} cookies from storage`,
-      );
-      return cookieStorage.cookies;
-    } catch (error) {
-      if ((error as any).code === "ENOENT") {
-        logger.debug("No existing cookie file found");
-        return null;
-      }
-      logger.error("Failed to load cookies:", error);
-      return null;
-    }
+  async clearAuth(): Promise<void> {
+    await this.sharedAuth.clearAuth("jira");
+    logger.info("[AuthManager] Auth cleared");
   }
 }

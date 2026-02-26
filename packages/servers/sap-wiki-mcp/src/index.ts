@@ -28,6 +28,68 @@ if (WIKI_DOMAIN && WIKI_API_TOKEN) {
   );
 }
 
+// Singleton HTTP client - created once and reused
+let httpClient: PureWikiHttpClient | null = null;
+
+async function getHttpClient(): Promise<PureWikiHttpClient> {
+  if (!httpClient) {
+    httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
+    await httpClient.initialize();
+  }
+  return httpClient;
+}
+
+/**
+ * Creates a standardized auth error response for cookie-based authentication
+ */
+async function createAuthErrorResponse(): Promise<{
+  content: Array<{ type: string; text: string }>;
+  isError: boolean;
+}> {
+  // For PAT authentication, return clear error message
+  if (WIKI_API_TOKEN) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  // For cookie-based auth, return structured error for sap-auth-mcp
+  const client = await getHttpClient();
+  const storageInfo = await client.getCookieStorageInfo();
+
+  // Extract directory path from file path
+  const storePath = storageInfo.filePath.substring(
+    0,
+    storageInfo.filePath.lastIndexOf("/"),
+  );
+
+  const structuredError = {
+    error: "SAP_AUTH_REQUIRED",
+    details:
+      "Need call SAP auth MCP to prepare cookie and redo function after.",
+    data: {
+      store_path: storePath,
+      entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
+    },
+  };
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(structuredError, null, 2),
+      },
+    ],
+    isError: true,
+  };
+}
+
 const server = new Server(
   {
     name: "sap-wiki-mcp",
@@ -334,12 +396,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `🔍 Search request: "${keyword}" (start: ${start}, limit: ${validatedLimit})`,
       );
 
-      // Direct search attempt - let authentication errors bubble up naturally
-      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
-      await httpClient.initialize();
-
+      const client = await getHttpClient();
       const startTime = Date.now();
-      const searchResponse = await httpClient.searchWiki(
+      const searchResponse = await client.searchWiki(
         keyword,
         start,
         validatedLimit,
@@ -380,53 +439,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       if (error instanceof Error) {
         if (error.message === "AUTHENTICATION_REQUIRED") {
-          // For PAT authentication, return clear error message
-          if (WIKI_API_TOKEN) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          // For cookie-based auth, return structured error for sap-auth-mcp
-          const httpClient = new PureWikiHttpClient(
-            WIKI_DOMAIN,
-            WIKI_API_TOKEN,
-          );
-          await httpClient.initialize();
-          const storageInfo = await httpClient.getCookieStorageInfo();
-
-          // Extract directory path from file path
-          const storePath = storageInfo.filePath.substring(
-            0,
-            storageInfo.filePath.lastIndexOf("/"),
-          );
-
-          const structuredError = {
-            error: "SAP_AUTH_REQUIRED",
-            details:
-              "Need call SAP auth MCP to prepare cookie and redo function after.",
-            data: {
-              store_path: storePath,
-              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
-            },
-          };
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(structuredError, null, 2),
-              },
-            ],
-            isError: true,
-          };
-        } else if (error.message === "NETWORK_ERROR") {
+          return await createAuthErrorResponse();
+        }
+        if (error.message === "NETWORK_ERROR") {
           return {
             content: [
               {
@@ -511,12 +526,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         `🔍 CQL search request: "${cql}" (start: ${start}, limit: ${validatedLimit})`,
       );
 
-      // Direct search attempt - let authentication errors bubble up naturally
-      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
-      await httpClient.initialize();
-
+      const client = await getHttpClient();
       const startTime = Date.now();
-      const searchResponse = await httpClient.cqlSearch(
+      const searchResponse = await client.cqlSearch(
         cql,
         start,
         validatedLimit,
@@ -572,53 +584,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       if (error instanceof Error) {
         if (error.message === "AUTHENTICATION_REQUIRED") {
-          // For PAT authentication, return clear error message
-          if (WIKI_API_TOKEN) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          // For cookie-based auth, return structured error for sap-auth-mcp
-          const httpClient = new PureWikiHttpClient(
-            WIKI_DOMAIN,
-            WIKI_API_TOKEN,
-          );
-          await httpClient.initialize();
-          const storageInfo = await httpClient.getCookieStorageInfo();
-
-          // Extract directory path from file path
-          const storePath = storageInfo.filePath.substring(
-            0,
-            storageInfo.filePath.lastIndexOf("/"),
-          );
-
-          const structuredError = {
-            error: "SAP_AUTH_REQUIRED",
-            details:
-              "Need call SAP auth MCP to prepare cookie and redo function after.",
-            data: {
-              store_path: storePath,
-              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
-            },
-          };
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(structuredError, null, 2),
-              },
-            ],
-            isError: true,
-          };
-        } else if (error.message === "NETWORK_ERROR") {
+          return await createAuthErrorResponse();
+        }
+        if (error.message === "NETWORK_ERROR") {
           return {
             content: [
               {
@@ -628,7 +596,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
             isError: true,
           };
-        } else if (error.message.includes("CQL query cannot be empty")) {
+        }
+        if (error.message.includes("CQL query cannot be empty")) {
           return {
             content: [
               {
@@ -638,7 +607,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
             isError: true,
           };
-        } else if (error.message.includes("CQL_SYNTAX_ERROR")) {
+        }
+        if (error.message.includes("CQL_SYNTAX_ERROR")) {
           return {
             content: [
               {
@@ -669,11 +639,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       console.error(`📄 Fetching wiki content from: ${url} (raw: ${raw}, format: ${format})`);
 
-      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
-      await httpClient.initialize();
+      const client = await getHttpClient();
 
       // Validate URL is from the configured wiki domain
-      const expectedDomain = httpClient.getWikiDomain();
+      const expectedDomain = client.getWikiDomain();
       if (!url.includes(expectedDomain)) {
         return {
           content: [
@@ -705,7 +674,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const pageId = pageIdMatch[1];
 
-        const storageData = await httpClient.getPageStorageFormat(pageId);
+        const storageData = await client.getPageStorageFormat(pageId);
         const endTime = Date.now();
         console.error(`✅ Storage format fetched in ${endTime - startTime}ms`);
 
@@ -729,7 +698,7 @@ ${storageData.content}`;
       }
 
       // Default: text format
-      const pageContent = await httpClient.fetchWikiContent(url, raw);
+      const pageContent = await client.fetchWikiContent(url, raw);
       const endTime = Date.now();
 
       console.error(`✅ Content fetched in ${endTime - startTime}ms`);
@@ -747,52 +716,7 @@ ${storageData.content}`;
 
       if (error instanceof Error) {
         if (error.message === "AUTHENTICATION_REQUIRED") {
-          // For PAT authentication, return clear error message
-          if (WIKI_API_TOKEN) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          // For cookie-based auth, return structured error for sap-auth-mcp
-          const httpClient = new PureWikiHttpClient(
-            WIKI_DOMAIN,
-            WIKI_API_TOKEN,
-          );
-          await httpClient.initialize();
-          const storageInfo = await httpClient.getCookieStorageInfo();
-
-          // Extract directory path from file path
-          const storePath = storageInfo.filePath.substring(
-            0,
-            storageInfo.filePath.lastIndexOf("/"),
-          );
-
-          const structuredError = {
-            error: "SAP_AUTH_REQUIRED",
-            details:
-              "Need call SAP auth MCP to prepare cookie and redo function after.",
-            data: {
-              store_path: storePath,
-              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
-            },
-          };
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(structuredError, null, 2),
-              },
-            ],
-            isError: true,
-          };
+          return await createAuthErrorResponse();
         }
       }
 
@@ -814,11 +738,9 @@ ${storageData.content}`;
 
       console.error(`📝 Updating wiki page: ${pageId} (version: ${version})`);
 
-      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
-      await httpClient.initialize();
-
+      const client = await getHttpClient();
       const startTime = Date.now();
-      const result = await httpClient.updatePageContent(
+      const result = await client.updatePageContent(
         pageId,
         content,
         version,
@@ -847,52 +769,7 @@ URL: ${result.url}`,
 
       if (error instanceof Error) {
         if (error.message === "AUTHENTICATION_REQUIRED") {
-          // For PAT authentication, return clear error message
-          if (WIKI_API_TOKEN) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          // For cookie-based auth, return structured error for sap-auth-mcp
-          const httpClient = new PureWikiHttpClient(
-            WIKI_DOMAIN,
-            WIKI_API_TOKEN,
-          );
-          await httpClient.initialize();
-          const storageInfo = await httpClient.getCookieStorageInfo();
-
-          // Extract directory path from file path
-          const storePath = storageInfo.filePath.substring(
-            0,
-            storageInfo.filePath.lastIndexOf("/"),
-          );
-
-          const structuredError = {
-            error: "SAP_AUTH_REQUIRED",
-            details:
-              "Need call SAP auth MCP to prepare cookie and redo function after.",
-            data: {
-              store_path: storePath,
-              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
-            },
-          };
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(structuredError, null, 2),
-              },
-            ],
-            isError: true,
-          };
+          return await createAuthErrorResponse();
         }
 
         // Handle specific update errors
@@ -951,11 +828,9 @@ URL: ${result.url}`,
 
       console.error(`📝 Creating wiki page: "${title}" in space ${spaceKey}${parentPageId ? ` (parent: ${parentPageId})` : ''}`);
 
-      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
-      await httpClient.initialize();
-
+      const client = await getHttpClient();
       const startTime = Date.now();
-      const result = await httpClient.createPage(spaceKey, title, content, parentPageId);
+      const result = await client.createPage(spaceKey, title, content, parentPageId);
       const endTime = Date.now();
 
       console.error(`✅ Page created in ${endTime - startTime}ms (pageId: ${result.pageId})`);
@@ -979,52 +854,7 @@ URL: ${result.url}`,
 
       if (error instanceof Error) {
         if (error.message === "AUTHENTICATION_REQUIRED") {
-          // For PAT authentication, return clear error message
-          if (WIKI_API_TOKEN) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          // For cookie-based auth, return structured error for sap-auth-mcp
-          const httpClient = new PureWikiHttpClient(
-            WIKI_DOMAIN,
-            WIKI_API_TOKEN,
-          );
-          await httpClient.initialize();
-          const storageInfo = await httpClient.getCookieStorageInfo();
-
-          // Extract directory path from file path
-          const storePath = storageInfo.filePath.substring(
-            0,
-            storageInfo.filePath.lastIndexOf("/"),
-          );
-
-          const structuredError = {
-            error: "SAP_AUTH_REQUIRED",
-            details:
-              "Need call SAP auth MCP to prepare cookie and redo function after.",
-            data: {
-              store_path: storePath,
-              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
-            },
-          };
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(structuredError, null, 2),
-              },
-            ],
-            isError: true,
-          };
+          return await createAuthErrorResponse();
         }
 
         // Handle specific create errors
@@ -1095,11 +925,9 @@ URL: ${result.url}`,
 
       console.error(`🗑️ Deleting wiki page: ${pageId}`);
 
-      const httpClient = new PureWikiHttpClient(WIKI_DOMAIN, WIKI_API_TOKEN);
-      await httpClient.initialize();
-
+      const client = await getHttpClient();
       const startTime = Date.now();
-      const result = await httpClient.deletePage(pageId);
+      const result = await client.deletePage(pageId);
       const endTime = Date.now();
 
       console.error(`✅ Page deleted in ${endTime - startTime}ms`);
@@ -1119,52 +947,7 @@ Page ID: ${result.pageId}`,
 
       if (error instanceof Error) {
         if (error.message === "AUTHENTICATION_REQUIRED") {
-          // For PAT authentication, return clear error message
-          if (WIKI_API_TOKEN) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.",
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          // For cookie-based auth, return structured error for sap-auth-mcp
-          const httpClient = new PureWikiHttpClient(
-            WIKI_DOMAIN,
-            WIKI_API_TOKEN,
-          );
-          await httpClient.initialize();
-          const storageInfo = await httpClient.getCookieStorageInfo();
-
-          // Extract directory path from file path
-          const storePath = storageInfo.filePath.substring(
-            0,
-            storageInfo.filePath.lastIndexOf("/"),
-          );
-
-          const structuredError = {
-            error: "SAP_AUTH_REQUIRED",
-            details:
-              "Need call SAP auth MCP to prepare cookie and redo function after.",
-            data: {
-              store_path: storePath,
-              entry_url: `https://${WIKI_DOMAIN || "wiki.one.int.sap"}/`,
-            },
-          };
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(structuredError, null, 2),
-              },
-            ],
-            isError: true,
-          };
+          return await createAuthErrorResponse();
         }
 
         // Handle specific delete errors

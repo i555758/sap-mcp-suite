@@ -18,10 +18,8 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import * as path from "path";
-import * as os from "os";
 
-import { TeamsAuthManager } from "./auth.js";
+import { TeamsAuthManager, AuthError, AuthExpiredError } from "./auth.js";
 import { TeamsApiClient } from "./api.js";
 import { GraphApiClient } from "./graph-api.js";
 import { createLogger, isVerbose, getLogFilePath } from "./logger.js";
@@ -32,12 +30,9 @@ const log = createLogger("teams-mcp");
 // Configuration
 // ============================================================================
 
-const DEFAULT_COOKIE_STORE_PATH = path.join(os.homedir(), ".sap-auth-mcp");
 const DEFAULT_REGION = "emea";
 
 // Get configuration from environment variables
-const COOKIE_STORE_PATH =
-  process.env.AUTH_COOKIE_DIR || DEFAULT_COOKIE_STORE_PATH;
 const REGION = (process.env.SAP_TEAMS_REGION || DEFAULT_REGION) as
   | "emea"
   | "amer"
@@ -308,7 +303,7 @@ const tools: Tool[] = [
   {
     name: "teams_web_search_people",
     description:
-      "Search for people by name or email. Returns contact information including email, phone, department, and job title. Requires Graph API token from sap_tokens.json.",
+      "Search for people by name or email. Returns contact information including email, phone, department, and job title. Requires Graph API token.",
     inputSchema: {
       type: "object",
       properties: {
@@ -327,7 +322,7 @@ const tools: Tool[] = [
   {
     name: "teams_web_calendar",
     description:
-      "Get calendar events for a time range. Supports preset ranges (today, week, month) or custom date range. Requires Graph API token from sap_tokens.json.",
+      "Get calendar events for a time range. Supports preset ranges (today, week, month) or custom date range. Requires Graph API token.",
     inputSchema: {
       type: "object",
       properties: {
@@ -357,7 +352,7 @@ const tools: Tool[] = [
   {
     name: "teams_web_manager",
     description:
-      "Get current user's manager (org chart). Returns manager's profile information. Requires Graph API token from sap_tokens.json.",
+      "Get current user's manager (org chart). Returns manager's profile information. Requires Graph API token.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -366,7 +361,7 @@ const tools: Tool[] = [
   {
     name: "teams_web_direct_reports",
     description:
-      "Get current user's direct reports (org chart). Returns list of direct reports with their profile information. Requires Graph API token from sap_tokens.json.",
+      "Get current user's direct reports (org chart). Returns list of direct reports with their profile information. Requires Graph API token.",
     inputSchema: {
       type: "object",
       properties: {
@@ -380,7 +375,7 @@ const tools: Tool[] = [
   {
     name: "teams_web_my_profile",
     description:
-      "Get current user's profile information from Microsoft Graph. Requires Graph API token from sap_tokens.json.",
+      "Get current user's profile information from Microsoft Graph. Requires Graph API token.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -405,16 +400,9 @@ const server = new Server(
 );
 
 // Initialize auth manager and API client
-const authManager = new TeamsAuthManager(COOKIE_STORE_PATH, REGION);
+const authManager = new TeamsAuthManager(undefined, REGION);
 const apiClient = new TeamsApiClient(authManager);
 const graphClient = new GraphApiClient(authManager);
-
-// Helper function to get Graph API unavailable error response
-function getGraphUnavailableError() {
-  return getSapAuthRequiredError(
-    "Graph API token not available in sap_tokens.json",
-  );
-}
 
 // Helper function to get SAP auth required error response
 function getSapAuthRequiredError(reason: string) {
@@ -425,7 +413,7 @@ function getSapAuthRequiredError(reason: string) {
         text: JSON.stringify(
           {
             error: reason,
-            hint: `Please authenticate with Teams using sap-auth-mcp: sap_authenticate with entry_url="https://teams.cloud.microsoft/v2/" and store_path="${COOKIE_STORE_PATH}"`,
+            hint: `Please authenticate with Teams using sap-auth-mcp: sap_authenticate with entry_url="https://teams.cloud.microsoft/v2/"`,
           },
           null,
           2,
@@ -774,10 +762,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const query = getRequiredParam<string>(args, "query");
         const limit = getParam<number>(args, "limit") ?? 10;
 
-        if (!graphClient.isAvailable()) {
-          return getGraphUnavailableError();
-        }
-
         const people = await graphClient.searchPeople(query, limit);
         return {
           content: [
@@ -802,10 +786,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const startDate = getParam<string>(args, "startDate");
         const endDate = getParam<string>(args, "endDate");
         const limit = getParam<number>(args, "limit") ?? 50;
-
-        if (!graphClient.isAvailable()) {
-          return getGraphUnavailableError();
-        }
 
         let events;
         let timeRangeDesc: string;
@@ -851,10 +831,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "teams_web_manager": {
-        if (!graphClient.isAvailable()) {
-          return getGraphUnavailableError();
-        }
-
         const manager = await graphClient.getManager();
         return {
           content: [
@@ -876,10 +852,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "teams_web_direct_reports": {
         const limit = getParam<number>(args, "limit") ?? 50;
 
-        if (!graphClient.isAvailable()) {
-          return getGraphUnavailableError();
-        }
-
         const directReports = await graphClient.getDirectReports(limit);
         return {
           content: [
@@ -899,10 +871,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "teams_web_my_profile": {
-        if (!graphClient.isAvailable()) {
-          return getGraphUnavailableError();
-        }
-
         const profile = await graphClient.getMe();
         return {
           content: [
@@ -920,11 +888,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    // Check if this is an authentication-related error
+    // Check if this is an authentication-related error using the new error types
     if (
+      error instanceof AuthError ||
+      error instanceof AuthExpiredError ||
       errorMessage.includes("authenticate") ||
       errorMessage.includes("token") ||
-      errorMessage.includes("SAP auth")
+      errorMessage.includes("SAP auth") ||
+      errorMessage.includes("sap-auth")
     ) {
       return getSapAuthRequiredError(errorMessage);
     }
@@ -950,7 +921,6 @@ async function main() {
   await server.connect(transport);
 
   log.info("Server started");
-  log.info(`Cookie store path: ${COOKIE_STORE_PATH}`);
   log.info(`Region: ${REGION}`);
 
   if (isVerbose()) {

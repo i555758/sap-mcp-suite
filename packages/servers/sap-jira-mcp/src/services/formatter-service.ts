@@ -76,6 +76,19 @@ export class FormatterService {
         const hasSpecificFieldsRequested =
           Array.isArray(requestedFields) && requestedFields.length > 0;
 
+        // Define standard fields that should always be displayed and show empty values when null
+        const standardFields = [
+          "labels",
+          "components",
+          "priority",
+          "customfield_12740",
+          "fixVersions",
+          "versions",
+          "customfield_15140",
+          "customfield_43742",
+          "customfield_43743",
+        ];
+
         // Determine which fields to display
         let fieldsToDisplay: string[] = [];
 
@@ -99,17 +112,6 @@ export class FormatterService {
           fieldsToDisplay = [...templateFields];
 
           // Add standard fields that should always be displayed
-          const standardFields = [
-            "labels",
-            "components",
-            "priority",
-            "customfield_12740",
-            "fixVersions",
-            "versions",
-            "customfield_15140",
-            "customfield_43742",
-            "customfield_43743",
-          ];
           fieldsToDisplay = [
             ...new Set([...fieldsToDisplay, ...standardFields]),
           ];
@@ -128,19 +130,6 @@ export class FormatterService {
 
         // Sort field names for consistent display
         fieldsToDisplay.sort();
-
-        // Define standard fields that should show empty values when null
-        const standardFields = [
-          "labels",
-          "components",
-          "priority",
-          "customfield_12740",
-          "fixVersions",
-          "versions",
-          "customfield_15140",
-          "customfield_43742",
-          "customfield_43743",
-        ];
 
         // Format and add each field
         for (const key of fieldsToDisplay) {

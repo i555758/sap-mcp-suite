@@ -19,20 +19,25 @@ const JIRA_DOMAIN = (process.env.JIRA_DOMAIN as string) || "jira.tools.sap";
 // Use the directory where index.js is located (dist/) if JIRA_CONFIG_DIR is not set
 // This ensures .jira-config.json is found regardless of where the command is run from
 const JIRA_CONFIG_DIR: string = process.env.JIRA_CONFIG_DIR || __dirname;
-// Cookie storage path (optional, for cookie-based auth)
-const AUTH_COOKIE_DIR: string | undefined = process.env.AUTH_COOKIE_DIR;
 
-// Initialize AuthManager
-const authManager = new AuthManager(JIRA_API_TOKEN, AUTH_COOKIE_DIR);
+// Initialize AuthManager (uses shared @anthropic/sap-auth package)
+const authManager = new AuthManager(JIRA_API_TOKEN);
 
-logger.info(`Starting Jira MCP server with:
+async function main() {
+  // Initialize auth manager (sets API token if provided)
+  await authManager.initialize();
+
+  logger.info(`Starting Jira MCP server with:
 - JIRA_DOMAIN: ${JIRA_DOMAIN}
 - JIRA_CONFIG_DIR: ${JIRA_CONFIG_DIR}
-- Cookie Dir: ${authManager.getCookieDir()}
+- Auth Storage: ${authManager.getCookieDir()}
 - Current working directory: ${process.cwd()}
 - Authentication: ${authManager.getAuthType()}
 - Verbose logging: ${logger.isVerboseMode() ? `enabled (${logger.getLogFile()})` : "disabled"}`);
 
-// Create and run the server
-const server = new JiraServer(authManager, JIRA_DOMAIN, JIRA_CONFIG_DIR);
-server.run().catch((error) => logger.error("Server error:", error));
+  // Create and run the server
+  const server = new JiraServer(authManager, JIRA_DOMAIN, JIRA_CONFIG_DIR);
+  await server.run();
+}
+
+main().catch((error) => logger.error("Server error:", error));
