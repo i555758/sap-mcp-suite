@@ -23,7 +23,7 @@ If "WRONG_DIR", STOP and tell the user to run from the sap-mcp-suite directory.
 Check if servers are built:
 
 ```bash
-ls packages/servers/sap-auth-mcp/dist/index.js packages/servers/sap-jira-mcp/dist/index.js packages/servers/sap-msteams-mcp/dist/index.js packages/servers/sap-wiki-mcp/dist/index.js packages/servers/mcp-github/build/index.js packages/servers/playwright-mcp/packages/playwright-mcp/index.js 2>/dev/null || echo "NEEDS_BUILD"
+ls packages/servers/sap-auth-mcp/dist/index.js packages/servers/sap-jira-mcp/dist/index.js packages/servers/sap-msteams-mcp/dist/index.js packages/servers/sap-wiki-mcp/dist/index.js packages/servers/mcp-github/build/index.js packages/servers/playwright-mcp/packages/playwright-mcp/cli.js 2>/dev/null || echo "NEEDS_BUILD"
 ```
 
 If any are missing, run the monorepo build:
@@ -157,7 +157,7 @@ Store this as REPO_PATH for building the server paths.
   },
   "playwright": {
     "command": "node",
-    "args": ["$REPO_PATH/packages/servers/playwright-mcp/packages/playwright-mcp/index.js"]
+    "args": ["$REPO_PATH/packages/servers/playwright-mcp/packages/playwright-mcp/cli.js"]
   }
 }
 ```

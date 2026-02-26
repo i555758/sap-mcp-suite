@@ -12,7 +12,9 @@
     "packages/servers/sap-wiki-mcp"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build:shared": "npm run build --workspace=@anthropic/sap-auth",
+    "build:servers": "npm run build --workspace=sap-auth-mcp --workspace=sap-jira-mcp --workspace=sap-msteams-mcp --workspace=sap-wiki-mcp --workspace=github-server",
+    "build": "npm run build:shared && npm run build:servers",
     "install:all": "npm install && cd packages/servers/playwright-mcp && npm install",
     "build:all": "npm run build && cd packages/servers/playwright-mcp && npm run build",
     "build:playwright": "cd packages/servers/playwright-mcp && npm install && npm run build"
