@@ -254,36 +254,20 @@ export class BrowserAuthenticator {
 
   /**
    * Kill any remaining Chrome processes that might be lingering
+   * Uses fkill for cross-platform compatibility (Windows, macOS, Linux)
    */
   private async killRemainingChromeProcesses(): Promise<void> {
     try {
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
+      const fkill = (await import('fkill')).default;
 
-      const { stdout } = await execAsync(
-        `ps aux | grep "Chrome.*--remote-debugging-port" | grep -v grep`,
-      );
+      // Kill Chrome processes - fkill handles platform differences automatically
+      await fkill('chrome', { force: true, silent: true, ignoreCase: true });
+      await fkill('Google Chrome', { force: true, silent: true, ignoreCase: true });
 
-      if (stdout.trim()) {
-        console.log('🔍 Found lingering Chrome processes, cleaning up...');
-
-        const lines = stdout.trim().split('\n');
-        for (const line of lines) {
-          const match = line.match(/\s+(\d+)\s+/);
-          if (match) {
-            const pid = match[1];
-            try {
-              await execAsync(`kill -9 ${pid}`);
-              console.log(`🔪 Killed lingering Chrome process ${pid}`);
-            } catch {
-              // Ignore kill errors
-            }
-          }
-        }
-      }
+      console.log('🔪 Cleaned up lingering Chrome processes');
     } catch {
       // Silent fail - this is just a cleanup attempt
+      // fkill throws if no matching processes found, which is fine
     }
   }
 
@@ -336,7 +320,7 @@ export class BrowserAuthenticator {
 
       const launchOptions: any = {
         headless: headless ? 'new' : false,
-        devtools: !headless,
+        devtools: false,
         executablePath: resolveBrowserPath(),
         args: [
           ...this.getCommonChromeArgs(),
@@ -643,6 +627,11 @@ export class BrowserAuthenticator {
 
     console.log('✅ Visible browser ready for user interaction');
     console.log('👤 Please complete any remaining authentication steps...');
+
+    // Show alert to user
+    await this.page.evaluate(() => {
+      alert('Please authenticate to use the SAP MCP servers.\n\nComplete the login process in this browser window.');
+    });
 
     // Wait for user to complete authentication
     const success = await this.waitForAuthenticationCompletion(domain);
@@ -1174,6 +1163,11 @@ export class BrowserAuthenticator {
             await this.page.goto(savedUrl || entryUrl, {
               waitUntil: 'networkidle2',
               timeout: 30000,
+            });
+
+            // Show alert to user
+            await this.page.evaluate(() => {
+              alert('Please authenticate to use the SAP MCP servers.\n\nComplete the login process in this browser window.');
             });
           }
 

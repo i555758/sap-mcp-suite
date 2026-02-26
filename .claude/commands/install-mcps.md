@@ -6,7 +6,20 @@ Supports both fresh installs and updates to existing configurations.
 
 ---
 
-## Step 1: Verify Directory
+## Step 1: Verify Prerequisites
+
+### Check Node.js and npm
+
+```bash
+node --version 2>/dev/null || echo "NODE_MISSING"
+npm --version 2>/dev/null || echo "NPM_MISSING"
+```
+
+If NODE_MISSING or NPM_MISSING, install Node.js using the appropriate package manager for the current platform (e.g., brew, winget, apt, etc.). After installation, verify with `node --version` and `npm --version`.
+
+---
+
+## Step 2: Verify Directory
 
 Ensure we're in the sap-mcp-suite monorepo:
 
@@ -18,7 +31,7 @@ If "WRONG_DIR", STOP and tell the user to run from the sap-mcp-suite directory.
 
 ---
 
-## Step 2: Build All MCP Servers
+## Step 3: Build All MCP Servers
 
 Check if servers are built:
 
@@ -36,7 +49,7 @@ Verify build succeeded by checking all dist folders exist.
 
 ---
 
-## Step 3: Check Existing Configuration
+## Step 4: Check Existing Configuration
 
 Read `~/.claude.json` and extract existing MCP configuration values:
 
@@ -53,7 +66,7 @@ Extract existing values from mcpServers if they exist:
 
 ---
 
-## Step 4: Get User Configuration (Only Missing Values)
+## Step 5: Get User Configuration (Only Missing Values)
 
 **Only ask for values that are NOT already configured.**
 
@@ -84,11 +97,11 @@ For any missing values, ask the user:
 5. **If Teams region is missing:**
    - Use AskUserQuestion with options: "amer", "emea", "apj"
 
-If ALL values are already configured, tell the user and ask if they want to reconfigure anything. If not, skip to Step 6.
+If ALL values are already configured, tell the user and ask if they want to reconfigure anything. If not, skip to Step 7.
 
 ---
 
-## Step 5: Determine Absolute Paths
+## Step 6: Determine Absolute Paths
 
 Get the absolute path to the repo:
 
@@ -100,7 +113,7 @@ Store this as REPO_PATH for building the server paths.
 
 ---
 
-## Step 6: Update ~/.claude.json
+## Step 7: Update ~/.claude.json
 
 1. Check if `~/.claude.json` exists. If not, create it with `{}`
 2. Read the file and parse it as JSON
@@ -166,7 +179,7 @@ Write the updated JSON back to `~/.claude.json`
 
 ---
 
-## Step 7: Restart and Resume
+## Step 8: Restart and Resume
 
 Tell the user:
 
@@ -200,7 +213,7 @@ STOP here. The user must restart and resume.
 
 ---
 
-## Step 8: Verify Installation
+## Step 9: Verify Installation
 
 After user resumes, verify all MCP servers are working by calling a tool from each:
 
@@ -246,7 +259,7 @@ If any fail with "No such tool":
 
 ---
 
-## Step 9: Complete
+## Step 10: Complete
 
 ```
 ============================================================
