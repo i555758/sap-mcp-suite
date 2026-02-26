@@ -62,12 +62,39 @@ Store this as REPO_PATH for building the server paths.
 
 ---
 
-## Step 5: Update ~/.claude.json
+## Step 5: Check for Existing MCP Configuration
 
 1. Check if `~/.claude.json` exists. If not, create it with `{}`
 2. Read the file and parse it as JSON
 3. If `mcpServers` key doesn't exist, create it as an empty object
-4. Merge the following server configs into `mcpServers` (replace $VARIABLES with actual values):
+4. Check for existing MCP servers that would conflict:
+   - `sap-auth-mcp`
+   - `sap-jira`
+   - `sap-msteams`
+   - `sap-wiki`
+   - `github-tools`
+   - `github-wdf`
+   - `playwright`
+
+5. If ANY of these servers already exist in `mcpServers`:
+   - List which servers are already configured and their current paths
+   - Ask the user using AskUserQuestion:
+     **Question:** "Some MCP servers are already configured. Update them to use this sap-mcp-suite installation?"
+     **Options:**
+     - "Yes, update all to use this folder"
+     - "No, keep existing configuration"
+
+   - If user chooses "No", STOP and tell them:
+     ```
+     Keeping existing MCP configuration.
+     To update later, run /install-mcps again.
+     ```
+
+---
+
+## Step 6: Update ~/.claude.json
+
+Merge the following server configs into `mcpServers` (replace $VARIABLES with actual values):
 
 ```json
 {
@@ -122,12 +149,11 @@ Store this as REPO_PATH for building the server paths.
 }
 ```
 
-5. If any server already exists in the config, ask the user if they want to overwrite it
-6. Write the updated JSON back to `~/.claude.json`
+Write the updated JSON back to `~/.claude.json`
 
 ---
 
-## Step 6: Restart and Resume
+## Step 7: Restart and Resume
 
 Tell the user:
 
@@ -161,7 +187,7 @@ STOP here. The user must restart and resume.
 
 ---
 
-## Step 7: Verify Installation
+## Step 8: Verify Installation
 
 After user resumes, verify all MCP servers are working by calling a tool from each:
 
@@ -202,7 +228,7 @@ If any fail with "No such tool":
 
 ---
 
-## Step 8: Complete
+## Step 9: Complete
 
 ```
 ============================================================
