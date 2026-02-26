@@ -234,6 +234,11 @@ mcp__github-wdf__get_current_user()
 mcp__sap-wiki__cql_examples()
 ```
 
+7. **playwright:**
+```
+mcp__playwright__browser_tabs({ action: "list" })
+```
+
 If any fail with "No such tool":
 1. Check `~/.claude.json` contains the `mcpServers` configuration
 2. Verify the paths in the config point to existing files
