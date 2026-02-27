@@ -1,5 +1,5 @@
 {
-  "name": "@anthropic/sap-auth",
+  "name": "sap-auth",
   "version": "1.0.0",
   "description": "Shared authentication package for SAP MCP servers",
   "type": "module",
@@ -17,7 +17,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "fkill": "^10.0.0",
+    "find-process": "^2.0.0",
+    "mcp-utils": "*",
     "puppeteer": "^24.0.0"
   },
   "devDependencies": {

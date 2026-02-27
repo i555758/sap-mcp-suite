@@ -2,18 +2,8 @@
  * Utility functions for formatting data
  */
 
-/**
- * Format a date string to a human-readable format
- * @param dateString The date string to format
- * @returns Formatted date string
- */
-export function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
+// Re-export formatDate from mcp-utils for backwards compatibility
+export { formatDate } from "mcp-utils";
 
 /**
  * Check if two strings are equal ignoring case

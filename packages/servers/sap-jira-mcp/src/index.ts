@@ -20,7 +20,7 @@ const JIRA_DOMAIN = (process.env.JIRA_DOMAIN as string) || "jira.tools.sap";
 // This ensures .jira-config.json is found regardless of where the command is run from
 const JIRA_CONFIG_DIR: string = process.env.JIRA_CONFIG_DIR || __dirname;
 
-// Initialize AuthManager (uses shared @anthropic/sap-auth package)
+// Initialize AuthManager (uses shared sap-auth package)
 const authManager = new AuthManager(JIRA_API_TOKEN);
 
 async function main() {

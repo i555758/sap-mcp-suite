@@ -5,13 +5,13 @@
 
 echo "🚀 Starting GitHub MCP Server Inspector"
 echo "📍 SAP GitHub Enterprise: https://github.tools.sap/"
-echo "👤 User: i530424"
+echo "👤 User: your-username"
 echo ""
 
 # Set environment variables
 export GITHUB_TOKEN="<YOUR_GITHUB_TOKEN>"
 export GITHUB_API_URL="https://github.tools.sap/api/v3"
-export GITHUB_DEFAULT_OWNER="i530424"
+export GITHUB_DEFAULT_OWNER="your-username"
 
 # Build the project first
 echo "🔨 Building project..."
@@ -54,7 +54,7 @@ if [ $? -eq 0 ]; then
     echo ""
     
     # Start the inspector
-    npx @modelcontextprotocol/inspector build/index.js
+    npx @modelcontextprotocol/inspector dist/index.js
 else
     echo "❌ Build failed!"
     exit 1

@@ -2,7 +2,7 @@
  * AuthManager - Main entry point for SAP auth
  *
  * Usage:
- *   import { AuthManager } from '@anthropic/sap-auth';
+ *   import { AuthManager } from 'sap-auth';
  *
  *   const auth = AuthManager.getInstance();
  *   const creds = await auth.getCredentials('wiki');
@@ -26,6 +26,7 @@ import { ProviderRegistry } from './providers/index.js';
 import { SapSsoMethod } from './methods/sap-sso.js';
 import { OAuthMethod } from './methods/oauth.js';
 import { ApiTokenMethod } from './methods/api-token.js';
+import { extractErrorMessage } from 'mcp-utils';
 
 /**
  * Main AuthManager singleton
@@ -84,7 +85,7 @@ export class AuthManager {
       }
       // Wrap other errors
       throw new AuthError(
-        `Failed to get credentials for ${providerId}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Failed to get credentials for ${providerId}: ${extractErrorMessage(error)}`,
         'AUTH_FAILED',
         providerId,
       );

@@ -23,7 +23,8 @@
     "test-auth": "node test-auth.js"
   },
   "dependencies": {
-    "@anthropic/sap-auth": "*",
+    "sap-auth": "*",
+    "mcp-utils": "*",
     "@modelcontextprotocol/sdk": "^1.27.0",
     "zod": "^4.3.6"
   },

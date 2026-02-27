@@ -1,5 +1,5 @@
 /**
- * Auth Manager - Thin wrapper around shared @anthropic/sap-auth package
+ * Auth Manager - Thin wrapper around shared sap-auth package
  *
  * Provides backward-compatible interface for Jira authentication
  * while delegating all work to the shared auth infrastructure.
@@ -9,7 +9,7 @@ import {
   AuthError,
   ApiTokenRequiredError,
   type Credentials,
-} from "@anthropic/sap-auth";
+} from "sap-auth";
 import { logger } from "../utils/logger.js";
 
 // Re-export types and errors that consumers might need

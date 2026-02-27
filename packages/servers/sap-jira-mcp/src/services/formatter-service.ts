@@ -1,9 +1,10 @@
 /**
  * Formatter service for Jira data
  */
-import { JiraIssue, JiraUser } from "../models/types.js";
+import { JiraIssue, JiraUser } from "../types.js";
 import { formatDate } from "../utils/formatters.js";
 import { ConfigService } from "./config-service.js";
+import { extractErrorMessage } from "mcp-utils";
 
 import { logger } from "../utils/logger.js";
 /**
@@ -256,8 +257,7 @@ export class FormatterService {
       return output;
     } catch (error) {
       logger.error("Error formatting issue:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       return `Error formatting issue ${issue?.key || "unknown"}: ${errorMessage}`;
     }
   }
@@ -309,8 +309,7 @@ export class FormatterService {
       return `${headerText}:\n\n${formattedIssues}\n\nTotal Issues: ${issues.length}`;
     } catch (error) {
       logger.error("Error formatting issue list:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       return `Error formatting issue list: ${errorMessage}`;
     }
   }
@@ -328,8 +327,7 @@ export class FormatterService {
 - URL: https://${this.jiraDomain}/browse/${issueKey}`;
     } catch (error) {
       logger.error("Error formatting created issue:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       return `Issue created successfully, but error formatting response: ${errorMessage}`;
     }
   }
@@ -363,8 +361,7 @@ export class FormatterService {
         .join("\n\n");
     } catch (error) {
       logger.error("Error formatting user details:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       return `Error formatting user details: ${errorMessage}`;
     }
   }
@@ -382,8 +379,7 @@ export class FormatterService {
       return users[0]?.name || "Unknown user";
     } catch (error) {
       logger.error("Error formatting user ID:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       return `Error formatting user ID: ${errorMessage}`;
     }
   }

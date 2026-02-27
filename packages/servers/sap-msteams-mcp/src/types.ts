@@ -59,7 +59,7 @@ export interface GraphUser {
 export interface TeamsConfig {
   /** Teams region: emea, amer, or apac */
   region?: "emea" | "amer" | "apac";
-  /** @deprecated No longer used - auth is handled by @anthropic/sap-auth */
+  /** @deprecated No longer used - auth is handled by sap-auth */
   cookieStorePath?: string;
 }
 

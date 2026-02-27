@@ -2,7 +2,7 @@
 /**
  * Main entry point for the GitHub MCP server
  */
-import { GitHubServer } from './services/github-server.js';
+import { GitHubServer } from './server.js';
 
 // Get environment variables
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN as string;

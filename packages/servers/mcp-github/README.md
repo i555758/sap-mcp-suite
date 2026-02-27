@@ -110,7 +110,7 @@ Add the following to your Cline MCP settings:
   "mcpServers": {
     "github": {
       "command": "node",
-      "args": ["/path/to/mcp-github/build/index.js"],
+      "args": ["/path/to/mcp-github/dist/index.js"],
       "env": {
         "GITHUB_TOKEN": "<YOUR_GITHUB_TOKEN>",
         "GITHUB_API_URL": "https://github.tools.sap/api/v3",
@@ -153,7 +153,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "mcp-github": {
       "command": "node",
-      "args": ["/path/to/mcp-github/build/index.js"],
+      "args": ["/path/to/mcp-github/dist/index.js"],
       "env": {
         "GITHUB_TOKEN": "<YOUR_GITHUB_TOKEN>",
         "GITHUB_API_URL": "https://api.github.com",
@@ -190,7 +190,7 @@ Add to your `claude_desktop_config.json`:
 {
   "name": "github",
   "command": "node",
-  "args": ["/absolute/path/to/mcp-github/build/index.js"],
+  "args": ["/absolute/path/to/mcp-github/dist/index.js"],
   "env": {
     "GITHUB_TOKEN": "<YOUR_GITHUB_TOKEN>",
     "GITHUB_API_URL": "https://api.github.com",
@@ -228,7 +228,7 @@ The remote method automatically handles downloading and running the server - no 
 2. **Get the absolute path** to your built server:
    ```bash
    pwd
-   # Copy the output and append '/build/index.js'
+   # Copy the output and append '/dist/index.js'
    ```
 
 3. **Configure your MCP client** with the server details
@@ -252,7 +252,7 @@ npm start
 
 Or run directly:
 ```bash
-node build/index.js
+node dist/index.js
 ```
 
 ### Available Tools

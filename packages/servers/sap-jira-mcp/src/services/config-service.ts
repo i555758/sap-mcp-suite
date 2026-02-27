@@ -10,7 +10,8 @@ import {
   JiraProjectConfig,
   JiraTemplate,
   FieldMapping,
-} from "../models/types.js";
+} from "../types.js";
+import { extractErrorMessage } from "mcp-utils";
 
 /**
  * Configuration service class
@@ -59,7 +60,7 @@ export class ConfigService {
     } catch (error) {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        error instanceof Error ? error.message : String(error),
+        extractErrorMessage(error),
       );
     }
   }
@@ -75,7 +76,7 @@ export class ConfigService {
     } catch (error) {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        error instanceof Error ? error.message : String(error),
+        extractErrorMessage(error),
       );
     }
   }
@@ -162,7 +163,7 @@ export class ConfigService {
     } catch (error) {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        error instanceof Error ? error.message : String(error),
+        extractErrorMessage(error),
       );
     }
   }
@@ -200,7 +201,7 @@ export class ConfigService {
     } catch (error) {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        error instanceof Error ? error.message : String(error),
+        extractErrorMessage(error),
       );
     }
   }
@@ -219,7 +220,7 @@ export class ConfigService {
     } catch (error) {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        error instanceof Error ? error.message : String(error),
+        extractErrorMessage(error),
       );
     }
   }
@@ -282,10 +283,10 @@ export class ConfigService {
       return config;
     } catch (error) {
       logger.error(
-        `Failed to load configuration: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to load configuration: ${extractErrorMessage(error)}`,
       );
       throw new Error(
-        `Failed to load configuration: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to load configuration: ${extractErrorMessage(error)}`,
       );
     }
   }

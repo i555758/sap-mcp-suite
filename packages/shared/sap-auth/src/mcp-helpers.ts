@@ -1,20 +1,38 @@
 /**
- * MCP Helper utilities for consistent error handling
+ * Auth-specific MCP helper utilities
  *
- * These helpers allow MCPs to format auth errors in a consistent way
- * without duplicating error message logic.
+ * These helpers allow MCPs to:
+ * - Format auth errors in a consistent way
+ * - Check if an error is auth-related
+ * - Convert credentials to HTTP headers
  */
 
-import { AuthError, AuthExpiredError, AuthNotConfiguredError, AuthBrowserError, ApiTokenRequiredError } from './types.js';
+import { AuthError, AuthExpiredError, AuthNotConfiguredError, AuthBrowserError, ApiTokenRequiredError, Credentials } from './types.js';
 import { ProviderRegistry } from './providers/index.js';
+import { McpErrorResponse } from 'mcp-utils';
+
+// ============================================================================
+// Credential Helpers
+// ============================================================================
 
 /**
- * Standard MCP error response format
+ * Convert credentials to HTTP headers
+ *
+ * @example
+ * const headers = credentialsToHeaders(creds);
+ * // { Cookie: "..." } or { Authorization: "Bearer ..." }
  */
-export interface McpErrorResponse {
-  content: Array<{ type: "text"; text: string }>;
-  isError: boolean;
+export function credentialsToHeaders(creds: Credentials): Record<string, string> {
+  if (creds.type === "cookie") {
+    return { Cookie: creds.value };
+  }
+  // bearer or api-token
+  return { Authorization: `Bearer ${creds.value}` };
 }
+
+// ============================================================================
+// Auth Error Helpers
+// ============================================================================
 
 /**
  * Get resolution hint based on error type
@@ -25,7 +43,6 @@ function getResolutionHint(error: AuthError): string {
   const entryUrl = config?.entryUrl || '';
 
   if (error instanceof AuthBrowserError) {
-    // Browser auth failed - likely cert selection or other interactive requirement
     if (error.message.includes('timeout') || error.message.includes('certificate')) {
       return `Browser authentication failed. If you have multiple certificates, try setting VISIBLE_MODE=true environment variable for interactive authentication.`;
     }
@@ -47,29 +64,20 @@ function getResolutionHint(error: AuthError): string {
     return error.instructions || `API token required for ${providerId}. Please configure the appropriate environment variable.`;
   }
 
-  // Generic auth error
   return `Authentication failed. If this persists, try setting VISIBLE_MODE=true for interactive authentication.`;
 }
 
 /**
  * Format an auth error into a standard MCP error response
  *
- * Use this in MCP catch blocks to return consistent error messages:
- *
- * ```typescript
+ * @example
  * } catch (error) {
  *   if (isAuthError(error)) {
  *     return formatAuthError(error, 'wiki');
  *   }
- *   // ... other error handling
  * }
- * ```
- *
- * @param error - The error to format (AuthError or legacy Error with "AUTHENTICATION_REQUIRED")
- * @param providerId - Provider ID (e.g., 'wiki', 'jira') - required for legacy errors
  */
 export function formatAuthError(error: unknown, providerId?: string): McpErrorResponse {
-  // Handle AuthError instances
   if (error instanceof AuthError) {
     const resolvedProviderId = error.providerId || providerId || 'unknown';
     const config = resolvedProviderId !== 'unknown' ? ProviderRegistry.get(resolvedProviderId) : null;
@@ -83,17 +91,12 @@ export function formatAuthError(error: unknown, providerId?: string): McpErrorRe
     };
 
     return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(errorResponse, null, 2),
-        },
-      ],
+      content: [{ type: 'text', text: JSON.stringify(errorResponse, null, 2) }],
       isError: true,
     };
   }
 
-  // Handle legacy errors (e.g., message === "AUTHENTICATION_REQUIRED")
+  // Handle legacy errors
   const resolvedProviderId = providerId || 'unknown';
   const config = resolvedProviderId !== 'unknown' ? ProviderRegistry.get(resolvedProviderId) : null;
   const entryUrl = config?.entryUrl || 'https://wiki.one.int.sap/';
@@ -101,18 +104,11 @@ export function formatAuthError(error: unknown, providerId?: string): McpErrorRe
   const errorResponse = {
     error: 'SAP_AUTH_REQUIRED',
     details: 'Need call SAP auth MCP to prepare cookie and redo function after.',
-    data: {
-      entry_url: entryUrl,
-    },
+    data: { entry_url: entryUrl },
   };
 
   return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(errorResponse, null, 2),
-      },
-    ],
+    content: [{ type: 'text', text: JSON.stringify(errorResponse, null, 2) }],
     isError: true,
   };
 }
@@ -120,13 +116,10 @@ export function formatAuthError(error: unknown, providerId?: string): McpErrorRe
 /**
  * Check if an error is an auth-related error
  *
- * Useful for MCPs that catch generic errors and need to determine
- * if they should use formatAuthError()
- *
- * This handles:
- * - AuthError and its subclasses (AuthExpiredError, AuthNotConfiguredError, etc.)
+ * Handles:
+ * - AuthError and its subclasses
  * - Legacy errors with message "AUTHENTICATION_REQUIRED"
- * - Errors with name "AuthRedirectError" (from HTTP interceptors)
+ * - Errors with name "AuthRedirectError"
  */
 export function isAuthError(error: unknown): boolean {
   if (error instanceof AuthError) {
@@ -134,11 +127,9 @@ export function isAuthError(error: unknown): boolean {
   }
 
   if (error instanceof Error) {
-    // Legacy error format used by some MCPs
     if (error.message === 'AUTHENTICATION_REQUIRED') {
       return true;
     }
-    // AuthRedirectError from HTTP interceptors
     if (error.name === 'AuthRedirectError') {
       return true;
     }

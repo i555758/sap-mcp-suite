@@ -14,7 +14,7 @@ process.env.GITHUB_DEFAULT_OWNER = process.env.GITHUB_DEFAULT_OWNER || 'your_use
 
 console.log('Starting GitHub MCP Server Inspector...');
 console.log('Using SAP GitHub Enterprise at: https://github.tools.sap/');
-console.log('Default user: i530424');
+console.log('Default user: your-username');
 console.log('');
 
 // Path to the built server

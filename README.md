@@ -58,7 +58,9 @@ Credentials are cached in `~/.sap-mcp/auth.json` and auto-refresh when possible 
 ```
 packages/
 ├── shared/
-│   └── sap-auth/          # Shared authentication library
+│   ├── sap-auth/          # Shared authentication library
+│   ├── mcp-utils/         # Shared MCP utilities (responses, errors, helpers)
+│   └── mcp-logger/        # Shared logging library
 └── servers/
     ├── sap-auth-mcp/      # Authentication MCP server
     ├── sap-jira-mcp/      # Jira MCP server
@@ -66,6 +68,24 @@ packages/
     ├── sap-wiki-mcp/      # Wiki MCP server
     ├── mcp-github/        # GitHub MCP server
     └── playwright-mcp/    # Browser automation (submodule)
+```
+
+### Server Source Structure
+
+All servers follow a consistent structure:
+
+```
+src/
+├── index.ts          # Entry point (thin)
+├── server.ts         # MCP server class
+├── types.ts          # Type definitions
+├── handlers/         # Tool handlers by domain
+│   ├── index.ts      # registerAllHandlers()
+│   └── *-handlers.ts
+├── api/              # External API clients
+│   └── *.ts
+└── services/         # Internal services (auth, config)
+    └── *.ts
 ```
 
 ## Scripts
@@ -79,18 +99,53 @@ packages/
 
 ## Development
 
-### Shared Auth Package (@anthropic/sap-auth)
+### Shared Auth Package (sap-auth)
 
 All MCP servers use the shared auth package:
 
 ```typescript
-import { AuthManager } from '@anthropic/sap-auth';
+import { AuthManager } from 'sap-auth';
 
 const auth = AuthManager.getInstance();
 const creds = await auth.getCredentials('wiki');
 
 // creds.type is 'cookie' or 'bearer'
 // creds.value is the credential string
+```
+
+### Shared Utilities (mcp-utils)
+
+Common MCP utilities for all servers:
+
+```typescript
+import {
+  jsonResponse, textResponse, textError,  // Response helpers
+  extractErrorMessage, formatError,        // Error helpers
+  wrapToolHandler,                          // Tool wrapper with error handling
+  delay,                                    // Async delay helper
+  getParam, getRequiredParam,              // Parameter extraction
+  formatDate, formatDateTime,              // Date formatting
+} from 'mcp-utils';
+
+// Wrap tool handlers with consistent error handling
+server.registerTool("my_tool", schema,
+  wrapToolHandler(
+    (args) => handleMyTool(args),
+    { isAuthError, onAuthError: formatAuthError }
+  )
+);
+```
+
+### Shared Logger (mcp-logger)
+
+Consistent logging across servers:
+
+```typescript
+import { createLogger } from 'mcp-logger';
+
+const log = createLogger('my-server');
+log.info('Server started');
+log.debug('Debug info');  // Only when VERBOSE=true
 ```
 
 ### Environment Variables

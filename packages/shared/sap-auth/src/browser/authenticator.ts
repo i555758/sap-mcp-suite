@@ -2,149 +2,67 @@
  * Browser-based authenticator using Puppeteer
  * Handles SAP SSO and OAuth token extraction
  *
- * This is a port of the battle-tested browser-hybrid-auth.ts from sap-auth-mcp
+ * This is the main orchestrator that coordinates between:
+ * - process-manager.ts: Chrome process lifecycle
+ * - browser-launcher.ts: Puppeteer setup and configuration
+ * - browser-session.ts: Browser session state management
+ * - auth-flows.ts: Cookie and flow utilities
+ * - sso-automation.ts: Automated SSO handling
+ * - token-extraction.ts: OAuth token extraction
  */
 
-import puppeteer, { Browser, Page } from 'puppeteer';
-import { existsSync } from 'fs';
-import { join } from 'path';
+import { Browser, Page } from 'puppeteer';
 import type { StoredCookie, StoredToken, StoredRefreshToken } from '../types.js';
 import { AuthBrowserError } from '../types.js';
-import { Storage } from '../storage.js';
-import { parseJwt } from '../utils/jwt.js';
+import { extractErrorMessage, delay } from 'mcp-utils';
 
-/**
- * Cross-platform User-Agent builder
- */
-function buildUserAgent(): string {
-  if (process.env.FORCE_UA) return process.env.FORCE_UA;
-  switch (process.platform) {
-    case 'win32':
-      return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0';
-    case 'linux':
-      return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-    case 'darwin':
-    default:
-      return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-  }
-}
+import {
+  buildSessionConfig,
+  createSessionState,
+  safeBrowserClose,
+  launchBrowserSession,
+  shouldFallbackToVisible,
+  navigateWithTimeout,
+  type BrowserSessionConfig,
+  type BrowserSessionState,
+} from './browser-session.js';
+import {
+  isTeamsUrl,
+  isLoginUrl,
+  extractCookies,
+  extractTeamsCookies,
+  waitForAuthenticationCompletion,
+  showAuthAlert,
+} from './auth-flows.js';
+import { attemptHeadlessAuth } from './sso-automation.js';
+import { extractTokens, extractMsalRefreshToken } from './token-extraction.js';
 
-/**
- * Cross-platform sec-ch-ua-platform builder
- */
-function buildSecChPlatform(): string {
-  if (process.env.FORCE_PLATFORM_HEADER) return process.env.FORCE_PLATFORM_HEADER;
-  switch (process.platform) {
-    case 'win32':
-      return '"Windows"';
-    case 'linux':
-      return '"Linux"';
-    case 'darwin':
-    default:
-      return '"macOS"';
-  }
-}
-
-/**
- * Resolve browser executable path
- */
-function resolveBrowserPath(): string | undefined {
-  const envPath = process.env.BROWSER_PATH;
-  if (envPath && existsSync(envPath)) {
-    return envPath;
-  }
-
-  let resolved: string | undefined;
-  if (process.platform === 'win32') {
-    const candidates = [
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    ];
-    resolved = candidates.find((p) => existsSync(p));
-  } else if (process.platform === 'darwin') {
-    resolved = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  } else {
-    const candidates = [
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/chromium',
-      '/snap/bin/chromium',
-      '/opt/google/chrome/chrome',
-    ];
-    resolved = candidates.find((p) => existsSync(p));
-  }
-
-  return resolved && existsSync(resolved) ? resolved : undefined;
-}
-
-/**
- * Teams URL patterns
- */
-const TEAMS_PATTERNS = [
-  'teams.microsoft.com',
-  'teams.cloud.microsoft',
-  'teams.live.com',
-  'teams.office.com',
-];
-
-function isTeamsUrl(url: string): boolean {
-  return TEAMS_PATTERNS.some((pattern) => url.includes(pattern));
-}
-
-/**
- * Platform-specific browser flags
- */
-const MAC_FLAGS = [
-  '--use-mock-keychain=true',
-  '--password-store=basic',
-  '--disable-keychain-reauthorization',
-  '--disable-mac-overlays',
-];
-
-const WINDOWS_FLAGS = ['--disable-gpu', '--window-size=1200,800'];
-
-const LINUX_FLAGS = ['--disable-gpu', '--window-size=1200,800'];
+// ============================================================================
+// Constants
+// ============================================================================
+const MAX_RETRIES = 3;
+const NAV_SETTLE_MS = 3000;
+const RETRY_DELAY_MS = 1000;
+const URL_TRUNCATION_LENGTH = 80;
+const VISIBLE_NAV_TIMEOUT_MS = 60000;
+const FALLBACK_NAV_TIMEOUT_MS = 30000;
+const NETWORK_IDLE_TIMEOUT_MS = 10000;
 
 /**
  * Browser authenticator for SAP systems
  * Hybrid mode: starts headless, switches to visible if user interaction needed
  */
 export class BrowserAuthenticator {
-  private browser: Browser | null = null;
-  private page: Page | null = null;
-  private readonly userAgent = buildUserAgent();
-  private readonly secChPlatform = buildSecChPlatform();
-  private readonly userEmail = process.env.SAP_AUTH_ACCOUNT;
-  private readonly inPrivate = process.env.IN_PRIVATE === 'true';
-  private readonly visibleMode = process.env.VISIBLE_MODE === 'true';
-  private readonly forceManualFallback = process.env.FORCE_MANUAL_FALLBACK === 'true';
-  // Force visible mode - skips headless entirely (useful for certificate selection dialogs)
-  private readonly forceVisible = process.env.SAP_AUTH_FORCE_VISIBLE === 'true' ||
-                                  process.env.SAP_AUTH_SKIP_HEADLESS === 'true';
-
-  // Browser instance management
-  private isInitialized = false;
-  private currentMode: 'headless' | 'visible' | null = null;
+  private state: BrowserSessionState = createSessionState();
+  private readonly config: BrowserSessionConfig = buildSessionConfig();
   private cleanupHandlersSetup = false;
 
-  /**
-   * Get common Chrome launch arguments
-   */
-  private getCommonChromeArgs(): string[] {
-    return [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--no-first-run',
-      '--disable-default-apps',
-      '--use-system-certificate-store',
-      '--auth-server-whitelist=*.sap.com,*.one.int.sap,*.wdf.sap.corp',
-      '--auth-negotiate-delegate-whitelist=*.sap.com,*.one.int.sap,*.wdf.sap.corp',
-      '--auth-schemes=basic,digest,ntlm,negotiate',
-      '--window-size=1200,800',
-    ];
+  private get browser(): Browser | null {
+    return this.state.browser;
+  }
+
+  private get page(): Page | null {
+    return this.state.page;
   }
 
   /**
@@ -154,7 +72,7 @@ export class BrowserAuthenticator {
     if (this.cleanupHandlersSetup) return;
 
     const cleanup = async () => {
-      console.log('🧹 Process cleanup: Closing browser...');
+      console.error('Process cleanup: Closing browser...');
       await this.close();
       process.exit(0);
     };
@@ -163,17 +81,17 @@ export class BrowserAuthenticator {
     process.on('SIGTERM', cleanup);
     process.on('exit', () => {
       if (this.browser) {
-        console.log('🧹 Process exit: Force closing browser...');
+        console.error('Process exit: Force closing browser...');
         this.browser.close().catch(() => {});
       }
     });
     process.on('uncaughtException', async (error) => {
-      console.error('🚨 Uncaught exception, cleaning up browser:', error);
+      console.error('Uncaught exception, cleaning up browser:', error);
       await this.emergencyCleanup();
       process.exit(1);
     });
     process.on('unhandledRejection', async (reason) => {
-      console.error('🚨 Unhandled rejection, cleaning up browser:', reason);
+      console.error('Unhandled rejection, cleaning up browser:', reason);
       await this.emergencyCleanup();
       process.exit(1);
     });
@@ -181,99 +99,15 @@ export class BrowserAuthenticator {
     this.cleanupHandlersSetup = true;
   }
 
-  /**
-   * Safe browser close method - prevents hanging Chrome instances
-   */
+  private async launchBrowser(headless: boolean): Promise<void> {
+    this.state = await launchBrowserSession(this.state, headless, this.config);
+    this.setupProcessCleanup();
+  }
+
   private async safeBrowserClose(): Promise<void> {
-    if (!this.browser) return;
-
-    let browserProcess: any = null;
-
-    try {
-      console.log('🔄 Safely closing existing browser instance...');
-      browserProcess = this.browser.process();
-
-      // First try to close all pages
-      const pages = await this.browser.pages();
-      for (const page of pages) {
-        try {
-          await page.close();
-        } catch {
-          // Ignore
-        }
-      }
-
-      // Then close the browser
-      await this.browser.close();
-      console.log('✅ Browser instance closed successfully');
-    } catch (error) {
-      console.warn('⚠️ Warning: Error during safe browser close:', error);
-    }
-
-    // Always try to kill the process forcefully as a backup
-    try {
-      if (browserProcess && !browserProcess.killed) {
-        console.log('🔪 Force killing browser process to ensure cleanup...');
-
-        try {
-          browserProcess.kill('SIGTERM');
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-
-          if (!browserProcess.killed) {
-            console.log('🔪 SIGTERM didn\'t work, trying SIGKILL...');
-            browserProcess.kill('SIGKILL');
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          }
-        } catch {
-          // Ignore kill errors
-        }
-
-        if (browserProcess.killed) {
-          console.log('✅ Browser process terminated successfully');
-        } else {
-          console.warn('⚠️ Warning: Browser process may still be running');
-        }
-      }
-    } catch {
-      // Ignore process errors
-    }
-
-    // Additional system-level cleanup
-    try {
-      await this.killRemainingChromeProcesses();
-    } catch {
-      // Ignore system cleanup errors
-    }
-
-    // Reset all references
-    this.browser = null;
-    this.page = null;
-    this.currentMode = null;
-    this.isInitialized = false;
+    this.state = await safeBrowserClose(this.state);
   }
 
-  /**
-   * Kill any remaining Chrome processes that might be lingering
-   * Uses fkill for cross-platform compatibility (Windows, macOS, Linux)
-   */
-  private async killRemainingChromeProcesses(): Promise<void> {
-    try {
-      const fkill = (await import('fkill')).default;
-
-      // Kill Chrome processes - fkill handles platform differences automatically
-      await fkill('chrome', { force: true, silent: true, ignoreCase: true });
-      await fkill('Google Chrome', { force: true, silent: true, ignoreCase: true });
-
-      console.log('🔪 Cleaned up lingering Chrome processes');
-    } catch {
-      // Silent fail - this is just a cleanup attempt
-      // fkill throws if no matching processes found, which is fine
-    }
-  }
-
-  /**
-   * Emergency cleanup for critical errors
-   */
   private async emergencyCleanup(): Promise<void> {
     try {
       await this.safeBrowserClose();
@@ -282,753 +116,54 @@ export class BrowserAuthenticator {
     }
   }
 
-  /**
-   * Unified browser launch method - prevents multiple instances
-   */
-  private async launchBrowser(headless: boolean = true): Promise<void> {
-    // Check for force visible mode - skip headless entirely
-    if (headless && this.forceVisible) {
-      console.log('🔧 SAP_AUTH_FORCE_VISIBLE or SAP_AUTH_SKIP_HEADLESS is set - skipping headless mode');
-      headless = false;
-    }
-
-    const desiredMode = headless ? 'headless' : 'visible';
-
-    // Skip if browser is already running in the desired mode
-    if (this.browser && this.currentMode === desiredMode) {
-      console.log(`🔄 Browser already running in ${desiredMode} mode, reusing instance`);
-      return;
-    }
-
-    // Close existing browser if switching modes
-    if (this.browser && this.currentMode !== desiredMode) {
-      console.log(`🔄 Switching from ${this.currentMode} to ${desiredMode} mode`);
-      await this.safeBrowserClose();
-    }
-
-    // Pre-launch cleanup
-    console.log('🧹 Pre-launch cleanup: checking for lingering Chrome processes...');
-    await this.killRemainingChromeProcesses();
-
-    try {
-      const platformSpecificFlags =
-        process.platform === 'darwin'
-          ? MAC_FLAGS
-          : process.platform === 'win32'
-            ? WINDOWS_FLAGS
-            : LINUX_FLAGS;
-
-      const launchOptions: any = {
-        headless: headless ? 'new' : false,
-        devtools: false,
-        executablePath: resolveBrowserPath(),
-        args: [
-          ...this.getCommonChromeArgs(),
-          ...platformSpecificFlags,
-          ...(headless
-            ? [
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-popup-blocking',
-              ]
-            : []),
-          ...(this.inPrivate
-            ? [
-                '--incognito',
-                '--disable-background-networking',
-                '--disable-background-timer-throttling',
-                '--disable-renderer-backgrounding',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-client-side-phishing-detection',
-                '--disable-default-apps',
-                '--disable-extensions',
-                '--disable-sync',
-                '--disable-translate',
-                '--hide-scrollbars',
-                '--metrics-recording-only',
-                '--mute-audio',
-                '--no-first-run',
-                '--safebrowsing-disable-auto-update',
-                '--disable-ipc-flooding-protection',
-              ]
-            : []),
-        ],
-      };
-
-      console.log(`🚀 Launching ${desiredMode} browser...`);
-      this.browser = await puppeteer.launch(launchOptions);
-      this.currentMode = desiredMode;
-
-      // Set up process cleanup handlers
-      this.setupProcessCleanup();
-
-      // Use the first (default) page instead of creating a new one
-      const pages = await this.browser.pages();
-      if (pages.length > 0) {
-        this.page = pages[0];
-        console.log('🪟 Using default browser page (avoiding duplicate windows)');
-      } else {
-        this.page = await this.browser.newPage();
-        console.log('🪟 Created new browser page');
-      }
-
-      // Configure page
-      await this.configurePageDefaults();
-      this.isInitialized = true;
-
-      console.log(`✅ ${desiredMode} browser launched successfully`);
-    } catch (error) {
-      console.error(`❌ Failed to launch ${desiredMode} browser:`, error);
-      await this.emergencyCleanup();
-      throw error;
-    }
-  }
-
-  /**
-   * Configure default page settings
-   */
-  private async configurePageDefaults(): Promise<void> {
-    if (!this.page) return;
-
-    // If in private mode, clear all cached data
-    if (this.inPrivate) {
-      console.log('🕵️ Private mode: Clearing all browser data and starting fresh...');
-      await this.page.evaluateOnNewDocument(() => {
-        localStorage.clear();
-        sessionStorage.clear();
-      });
-    }
-
-    // Set dynamic user agent
-    await this.page.setUserAgent(this.userAgent);
-
-    // Set viewport
-    await this.page.setViewport({ width: 1920, height: 1080 });
-  }
-
-  /**
-   * Close browser
-   */
   async close(): Promise<void> {
     await this.safeBrowserClose();
   }
 
   /**
    * Authenticate with SAP SSO and return cookies
-   * Uses hybrid mode: headless first, visible fallback if needed
    */
-  async authenticateSapSso(
-    entryUrl: string,
-    domain: string,
-  ): Promise<StoredCookie[]> {
+  async authenticateSapSso(entryUrl: string, domain: string): Promise<StoredCookie[]> {
     try {
-      // Extract domain from URL if not provided
-      if (!domain) {
-        try {
-          const url = new URL(entryUrl);
-          domain = url.hostname;
-        } catch {
-          domain = 'wiki.one.int.sap';
-        }
-      }
+      domain = this.resolveDomain(entryUrl, domain, 'wiki.one.int.sap');
+      this.logAuthStart(domain, entryUrl);
 
-      console.log(`🔄 Authenticating with ${domain}...`);
-      console.log(`🎯 Entry URL: ${entryUrl}`);
-
-      if (this.userEmail) {
-        console.log(`🔐 SAP Auth Account: ${this.userEmail}`);
-      }
-
-      // Handle force visible mode preference (for certificate selection scenarios)
-      if (this.forceVisible) {
-        console.log('🔧 Force visible mode: Starting with visible browser (SAP_AUTH_FORCE_VISIBLE/SAP_AUTH_SKIP_HEADLESS)');
-        return await this.authenticateWithVisibleMode(entryUrl, domain);
-      }
-
-      // Handle visible mode preference
-      if (this.visibleMode) {
-        console.log('👁️ Visible mode: Starting with visible browser');
+      // Handle visible mode preferences
+      if (this.config.forceVisible || this.config.visibleMode) {
         return await this.authenticateWithVisibleMode(entryUrl, domain);
       }
 
       // Start with headless mode
-      console.log('🤖 Starting hybrid authentication (headless first)...');
+      console.error('Starting hybrid authentication (headless first)...');
       await this.launchBrowser(true);
 
       if (!this.page) {
         throw new AuthBrowserError(domain, 'Failed to create page');
       }
 
-      // Navigate to entry URL - catch timeout for certificate selection scenarios
-      console.log(`🌐 Navigating to ${entryUrl}...`);
-      try {
-        await this.page.goto(entryUrl, {
-          waitUntil: 'networkidle2',
-          timeout: 45000,
-        });
-      } catch (navError) {
-        // Navigation timeout often indicates certificate selection dialog blocking in headless mode
-        const navErrorMsg = navError instanceof Error ? navError.message : 'Unknown error';
-        console.log(`⚠️ Navigation issue in headless mode: ${navErrorMsg}`);
-
-        if (navErrorMsg.includes('timeout') || navErrorMsg.includes('Timeout') ||
-            navErrorMsg.includes('net::ERR_') || navErrorMsg.includes('SSL') ||
-            navErrorMsg.includes('certificate')) {
-          console.log('🔄 Navigation blocked (likely certificate selection) - switching to visible browser...');
-          await this.safeBrowserClose();
-          return await this.authenticateWithVisibleMode(entryUrl, domain);
-        }
-        throw navError;
+      // Navigate with fallback handling
+      const navigated = await this.navigateWithFallback(entryUrl, domain);
+      if (!navigated) {
+        return await this.authenticateWithVisibleMode(entryUrl, domain);
       }
-
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      let currentUrl = this.page.url();
-      console.log(`📍 Current URL: ${currentUrl.substring(0, 80)}...`);
 
       // Check if already authenticated
-      if (currentUrl.includes(domain) && !this.isLoginUrl(currentUrl)) {
-        console.log('✅ Already authenticated');
-        const cookies = await this.extractCookies(domain);
-        await this.safeBrowserClose();
-        return cookies;
+      const currentUrl = this.page.url();
+      if (currentUrl.includes(domain) && !isLoginUrl(currentUrl)) {
+        console.error('Already authenticated');
+        return await this.extractAndClose(domain);
       }
 
-      // Handle SSO flow
-      const MAX_SSO_RETRIES = 3;
-      for (let attempt = 1; attempt <= MAX_SSO_RETRIES; attempt++) {
-        console.log(`\n📋 SSO Attempt ${attempt}/${MAX_SSO_RETRIES}`);
-
-        const result = await this.attemptHeadlessAuth(domain);
-
-        if (result.success) {
-          const cookies = await this.extractCookies(domain);
-          await this.safeBrowserClose();
-          return cookies;
-        }
-
-        if (result.needsUserInteraction) {
-          console.log('🔄 Switching to visible browser for user interaction...');
-          return await this.switchToVisibleForCompletion(entryUrl, domain);
-        }
-
-        // If we reached here, retry
-        if (attempt < MAX_SSO_RETRIES) {
-          console.log(`⚠️ Retrying SSO (attempt ${attempt + 1}/${MAX_SSO_RETRIES})...`);
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-      }
-
-      // All retries exhausted, fallback to visible mode
-      console.log(`\n📋 All SSO attempts exhausted, falling back to visible browser`);
-      return await this.switchToVisibleForCompletion(entryUrl, domain);
+      // Handle SSO flow with retries
+      return await this.runSsoFlow(entryUrl, domain);
     } catch (error) {
       await this.emergencyCleanup();
-      if (error instanceof AuthBrowserError) {
-        throw error;
-      }
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new AuthBrowserError(
-        domain,
-        `${errorMessage}`,
-      );
+      throw this.wrapError(error, domain);
     }
   }
 
   /**
-   * Authenticate with visible mode from start
-   */
-  private async authenticateWithVisibleMode(
-    entryUrl: string,
-    domain: string,
-  ): Promise<StoredCookie[]> {
-    await this.launchBrowser(false);
-
-    if (!this.page) {
-      throw new AuthBrowserError(domain, 'Failed to create visible page');
-    }
-
-    // Try automation in visible mode
-    console.log('🤖 Running automated authentication in visible browser...');
-    await this.page.goto(entryUrl, {
-      waitUntil: 'networkidle2',
-      timeout: 60000,
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    // Check if already authenticated
-    const currentUrl = this.page.url();
-    if (currentUrl.includes(domain) && !this.isLoginUrl(currentUrl)) {
-      console.log('✅ Already authenticated');
-      const cookies = await this.extractCookies(domain);
-      await this.safeBrowserClose();
-      return cookies;
-    }
-
-    // Try automated flow
-    const result = await this.attemptHeadlessAuth(domain);
-
-    if (result.success) {
-      const cookies = await this.extractCookies(domain);
-      await this.safeBrowserClose();
-      return cookies;
-    }
-
-    // Wait for user to complete authentication
-    console.log('👤 Please complete authentication in the visible browser...');
-    const success = await this.waitForAuthenticationCompletion(domain);
-
-    if (!success) {
-      throw new AuthBrowserError(domain, 'Authentication timeout');
-    }
-
-    const cookies = await this.extractCookies(domain);
-    await this.safeBrowserClose();
-    return cookies;
-  }
-
-  /**
-   * Switch to visible mode for completion
-   */
-  private async switchToVisibleForCompletion(
-    entryUrl: string,
-    domain: string,
-  ): Promise<StoredCookie[]> {
-    // Save current state
-    const currentUrl = this.page?.url() || '';
-    const currentCookies = this.page ? await this.page.cookies() : [];
-
-    // Switch to visible browser
-    await this.launchBrowser(false);
-
-    if (!this.page) {
-      throw new AuthBrowserError(domain, 'Failed to create visible page');
-    }
-
-    // Restore cookies and state
-    if (currentCookies.length > 0) {
-      await this.page.setCookie(...currentCookies);
-      console.log(`🍪 Restored ${currentCookies.length} cookies to visible browser`);
-    }
-
-    // Navigate to current state or entry URL
-    if (currentUrl && !currentUrl.startsWith('about:')) {
-      console.log('🌐 Restoring authentication state in visible browser...');
-      await this.page.goto(currentUrl, {
-        waitUntil: 'networkidle2',
-        timeout: 30000,
-      });
-    } else {
-      await this.page.goto(entryUrl, {
-        waitUntil: 'networkidle2',
-        timeout: 60000,
-      });
-    }
-
-    console.log('✅ Visible browser ready for user interaction');
-    console.log('👤 Please complete any remaining authentication steps...');
-
-    // Show alert to user
-    await this.page.evaluate(() => {
-      alert('Please authenticate to use the SAP MCP servers.\n\nComplete the login process in this browser window.');
-    });
-
-    // Wait for user to complete authentication
-    const success = await this.waitForAuthenticationCompletion(domain);
-
-    if (!success) {
-      throw new AuthBrowserError(domain, 'Authentication timeout after switching to visible mode');
-    }
-
-    const cookies = await this.extractCookies(domain);
-    await this.safeBrowserClose();
-    return cookies;
-  }
-
-  /**
-   * Attempt headless authentication (email clicking, etc.)
-   * Detects when user interaction is needed, including certificate selection dialogs
-   */
-  private async attemptHeadlessAuth(
-    domain: string,
-  ): Promise<{ success: boolean; needsUserInteraction: boolean }> {
-    if (!this.page) return { success: false, needsUserInteraction: false };
-
-    // Check if we should force manual fallback for testing
-    if (this.forceManualFallback) {
-      console.log('🔧 FORCE_MANUAL_FALLBACK enabled - skipping automation');
-      return { success: false, needsUserInteraction: true };
-    }
-
-    try {
-      // First, try to get the current URL with a timeout to detect cert selection hangs
-      let currentUrl: string;
-      try {
-        currentUrl = this.page.url();
-      } catch (urlError) {
-        // If we can't even get the URL, something is blocking (possibly cert dialog)
-        console.log('⚠️ Cannot access page URL - possible certificate selection dialog');
-        
-        return { success: false, needsUserInteraction: true };
-      }
-
-      // Check if not on Microsoft login
-      if (!currentUrl.includes('microsoftonline.com')) {
-        const isOnTarget = currentUrl.includes(domain) && !this.isLoginUrl(currentUrl);
-        if (isOnTarget) {
-          return { success: true, needsUserInteraction: false };
-        }
-        console.log('❌ Not on Microsoft SSO page');
-        return { success: false, needsUserInteraction: true };
-      }
-
-      // Look for email input field with timeout
-      let emailInput;
-      try {
-        emailInput = await Promise.race([
-          this.page.$('input[type="email"]'),
-          new Promise<null>((_, reject) =>
-            setTimeout(() => reject(new Error('Element search timeout')), 10000)
-          )
-        ]);
-      } catch (timeoutError) {
-        console.log('⚠️ Timeout searching for email input - possible certificate selection dialog');
-        
-        return { success: false, needsUserInteraction: true };
-      }
-
-      if (emailInput) {
-        if (!this.userEmail) {
-          console.log('⚠️ No SAP_AUTH_ACCOUNT set, need visible browser for email input');
-          return { success: false, needsUserInteraction: true };
-        }
-
-        console.log(`📧 Filling email input with: ${this.userEmail}`);
-
-        // Fill email with timeout protection
-        try {
-          await Promise.race([
-            (async () => {
-              await (emailInput as any).click();
-              await (emailInput as any).evaluate((el: HTMLInputElement) => el.value = '');
-              await (emailInput as any).type(this.userEmail);
-            })(),
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error('Email input timeout')), 15000)
-            )
-          ]);
-        } catch (inputError) {
-          console.log('⚠️ Timeout during email input - possible certificate dialog blocking');
-          
-          return { success: false, needsUserInteraction: true };
-        }
-
-        // Click submit with timeout protection
-        try {
-          const submitButton =
-            (await this.page.$('input[type="submit"]')) ||
-            (await this.page.$('button[type="submit"]')) ||
-            (await this.page.$('#idSIButton9'));
-
-          if (submitButton) {
-            console.log('🖱️ Clicking submit button...');
-            await Promise.race([
-              submitButton.click(),
-              new Promise<void>((_, reject) =>
-                setTimeout(() => reject(new Error('Submit click timeout')), 10000)
-              )
-            ]);
-            await new Promise((resolve) => setTimeout(resolve, 3000));
-          }
-        } catch (submitError) {
-          console.log('⚠️ Timeout during submit - possible certificate dialog blocking');
-          
-          return { success: false, needsUserInteraction: true };
-        }
-      }
-
-      // Look for account selection with timeout protection
-      const accountSelectors = [
-        '.table-row',
-        '[data-test-id*="@"]',
-        'div[title*="@"]',
-        'button[data-test-id*="@"]',
-      ];
-
-      for (const selector of accountSelectors) {
-        try {
-          const elements = await Promise.race([
-            this.page.$$(selector),
-            new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 5000))
-          ]);
-          for (const element of elements) {
-            const text = await element.evaluate((el: Element) => el.textContent || '');
-            const targetEmail = this.userEmail || '@sap.com';
-            if (text.includes(targetEmail) || text.includes('@')) {
-              console.log(`🖱️ Clicking account: ${text.substring(0, 40)}...`);
-              await element.click();
-              await new Promise((resolve) => setTimeout(resolve, 5000));
-              break;
-            }
-          }
-        } catch {
-          // Continue
-        }
-      }
-
-      // Check for MFA/authenticator number
-      const authenticatorNumber = await this.checkForAuthenticatorNumber();
-      if (authenticatorNumber) {
-        console.log('🔐 Microsoft Authenticator Number Matching Required');
-        console.log(`🔢 Enter this number in your Authenticator app: ${authenticatorNumber}`);
-        return { success: false, needsUserInteraction: true };
-      }
-
-      // Handle automatic prompts
-      await this.handleAutomaticPrompts();
-
-      // Check if we reached target with timeout protection
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      let newUrl: string;
-      try {
-        newUrl = this.page.url();
-      } catch {
-        console.log('⚠️ Cannot access page URL after auth attempt - possible certificate dialog');
-        
-        return { success: false, needsUserInteraction: true };
-      }
-
-      const isOnTarget = newUrl.includes(domain) && !this.isLoginUrl(newUrl);
-
-      if (isOnTarget) {
-        // Wait to confirm (SSO sometimes has double redirects)
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        const confirmedUrl = this.page.url();
-        const stillOnTarget = confirmedUrl.includes(domain) && !this.isLoginUrl(confirmedUrl);
-
-        if (stillOnTarget) {
-          console.log('✅ SSO completed successfully');
-          return { success: true, needsUserInteraction: false };
-        }
-      }
-
-      // Still on login page - check for MFA or other requirements
-      let pageContent: string;
-      try {
-        pageContent = await Promise.race([
-          this.page.evaluate(() => document.body.textContent || ''),
-          new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000))
-        ]);
-      } catch {
-        pageContent = '';
-      }
-
-      // Check for indicators that need user interaction
-      const needsInteraction =
-        pageContent.includes('code') ||
-        pageContent.includes('verify') ||
-        pageContent.includes('certificate') ||
-        pageContent.includes('Authenticator') ||
-        pageContent.includes('password') ||
-        pageContent.includes('smartcard') ||
-        pageContent.includes('smart card') ||
-        pageContent.includes('select a certificate') ||
-        pageContent.includes('Choose a certificate') ||
-        pageContent.length < 500; // Very short content often indicates a dialog/prompt
-
-      if (needsInteraction) {
-        console.log('🔐 Additional authentication steps required');
-        if (pageContent.includes('certificate') || pageContent.includes('smartcard') || pageContent.includes('smart card')) {
-          
-        }
-        return { success: false, needsUserInteraction: true };
-      }
-
-      return { success: false, needsUserInteraction: true };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.log(`❌ Headless auth failed: ${errorMessage}`);
-
-      // Check for common certificate-related error patterns
-      const certRelatedPatterns = [
-        'timeout',
-        'navigation',
-        'net::ERR_',
-        'SSL',
-        'certificate',
-        'TLS',
-        'handshake',
-        'connection refused',
-        'ERR_CERT_',
-        'ERR_SSL_',
-      ];
-
-      const isCertRelated = certRelatedPatterns.some(pattern =>
-        errorMessage.toLowerCase().includes(pattern.toLowerCase())
-      );
-
-      if (isCertRelated) {
-        console.log('⚠️ Error may be related to certificate selection or SSL handshake');
-        
-      }
-
-      return { success: false, needsUserInteraction: true };
-    }
-  }
-
-  /**
-   * Check for Microsoft Authenticator number matching display
-   */
-  private async checkForAuthenticatorNumber(): Promise<string | null> {
-    if (!this.page) return null;
-
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Look for the specific ID
-      const numberElement = await this.page.$('#idRemoteNGC_DisplaySign');
-      if (numberElement) {
-        const numberText = await numberElement.evaluate((el) => el.textContent?.trim() || '');
-        if (numberText && /^\d+$/.test(numberText)) {
-          return numberText;
-        }
-      }
-
-      // Also check for other common selectors
-      const alternativeSelectors = [
-        '.ms-TextField-field',
-        '.ms-Label',
-        '[data-testid*="number"]',
-        '.number-display',
-        '.auth-number',
-      ];
-
-      for (const selector of alternativeSelectors) {
-        try {
-          const elements = await this.page.$$(selector);
-          for (const element of elements) {
-            const text = await element.evaluate((el) => el.textContent?.trim() || '');
-            if (text && /^\d{2,3}$/.test(text)) {
-              return text;
-            }
-          }
-        } catch {
-          // Continue
-        }
-      }
-
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Handle automatic prompts
-   */
-  private async handleAutomaticPrompts(): Promise<void> {
-    if (!this.page) return;
-
-    const selectors = [
-      '#idSIButton9', // Stay signed in - Yes
-      'input[value="Yes"]',
-      'input[value="Accept"]',
-    ];
-
-    for (const selector of selectors) {
-      try {
-        const element = await this.page.$(selector);
-        if (element) {
-          console.log(`🖱️ Auto-clicking: ${selector}`);
-          await element.click();
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          return;
-        }
-      } catch {
-        // Continue
-      }
-    }
-  }
-
-  /**
-   * Wait for authentication to complete
-   */
-  private async waitForAuthenticationCompletion(
-    domain: string,
-    isTeams: boolean = false,
-  ): Promise<boolean> {
-    if (!this.page) return false;
-
-    console.log('⏳ Waiting for authentication to complete...');
-    const maxAttempts = 72; // 6 minutes (5-second intervals)
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-
-      const currentUrl = this.page.url();
-
-      const isOnTarget = isTeams
-        ? isTeamsUrl(currentUrl) && !this.isLoginUrl(currentUrl)
-        : currentUrl.includes(domain) && !this.isLoginUrl(currentUrl);
-
-      if (isOnTarget) {
-        // Confirm no redirect
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        const confirmedUrl = this.page.url();
-        const stillOnTarget = isTeams
-          ? isTeamsUrl(confirmedUrl) && !this.isLoginUrl(confirmedUrl)
-          : confirmedUrl.includes(domain) && !this.isLoginUrl(confirmedUrl);
-
-        if (stillOnTarget) {
-          console.log('✅ Authentication completed');
-          return true;
-        }
-      }
-
-      if (attempt % 6 === 0) {
-        console.log(`⏳ Waiting for authentication... (${Math.round((attempt * 5) / 60)}m)`);
-      }
-    }
-
-    console.log('⏰ Authentication timeout after 6 minutes');
-    return false;
-  }
-
-  /**
-   * Check if URL is a login page
-   */
-  private isLoginUrl(url: string): boolean {
-    return (
-      url.includes('login') ||
-      url.includes('auth') ||
-      url.includes('microsoftonline.com') ||
-      url.includes('accounts.sap.com')
-    );
-  }
-
-  /**
-   * Extract cookies from browser
-   */
-  private async extractCookies(domain: string): Promise<StoredCookie[]> {
-    if (!this.page) return [];
-
-    const cookies = await this.page.cookies();
-
-    return cookies.map((c) => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path,
-      expires: c.expires,
-      httpOnly: c.httpOnly,
-      secure: c.secure,
-      sameSite: c.sameSite as 'Strict' | 'Lax' | 'None' | undefined,
-    }));
-  }
-
-  /**
-   * Authenticate with OAuth and extract tokens (e.g., Microsoft Teams)
+   * Authenticate with OAuth and extract tokens
    */
   async authenticateOAuth(
     entryUrl: string,
@@ -1048,226 +183,58 @@ export class BrowserAuthenticator {
   }> {
     try {
       const isTeams = isTeamsUrl(entryUrl);
+      domain = this.resolveDomain(entryUrl, domain, 'teams.microsoft.com');
+      this.logAuthStart(isTeams ? 'Microsoft Teams' : domain, entryUrl);
 
-      if (!domain) {
-        try {
-          const url = new URL(entryUrl);
-          domain = url.hostname;
-        } catch {
-          domain = 'teams.microsoft.com';
-        }
-      }
-
-      console.log(`🔄 Authenticating with ${isTeams ? 'Microsoft Teams' : domain}...`);
-      console.log(`🎯 Entry URL: ${entryUrl}`);
-
-      if (this.userEmail) {
-        console.log(`🔐 SAP Auth Account: ${this.userEmail}`);
-      }
-
-      // Handle force visible mode preference (for certificate selection scenarios)
-      if (this.forceVisible) {
-        console.log('🔧 Force visible mode: Starting with visible browser (SAP_AUTH_FORCE_VISIBLE/SAP_AUTH_SKIP_HEADLESS)');
-        await this.launchBrowser(false);
-      } else if (this.visibleMode) {
-        // Handle visible mode preference
-        console.log('👁️ Visible mode: Starting with visible browser');
-        await this.launchBrowser(false);
-      } else {
-        // Start with headless mode
-        console.log('🤖 Starting hybrid authentication (headless first)...');
-        await this.launchBrowser(true);
-      }
+      // Launch browser based on mode preferences
+      await this.launchBrowser(!(this.config.forceVisible || this.config.visibleMode));
 
       if (!this.page) {
         throw new AuthBrowserError(domain, 'Failed to create page');
       }
 
-      // Navigate to entry URL - catch timeout for certificate selection scenarios
-      console.log(`🌐 Navigating to ${entryUrl}...`);
-      try {
-        await this.page.goto(entryUrl, {
-          waitUntil: 'networkidle2',
-          timeout: 45000,
-        });
-      } catch (navError) {
-        // Navigation timeout often indicates certificate selection dialog blocking
-        const navErrorMsg = navError instanceof Error ? navError.message : 'Unknown error';
-        console.log(`⚠️ Navigation issue: ${navErrorMsg}`);
-
-        // Only auto-fallback if we were in headless mode
-        if (!this.visibleMode && !this.forceVisible &&
-            (navErrorMsg.includes('timeout') || navErrorMsg.includes('Timeout') ||
-             navErrorMsg.includes('net::ERR_') || navErrorMsg.includes('SSL') ||
-             navErrorMsg.includes('certificate'))) {
-          console.log('🔄 Navigation blocked (likely certificate selection) - switching to visible browser...');
-          await this.safeBrowserClose();
-          // Restart in visible mode
-          await this.launchBrowser(false);
-          if (!this.page) {
-            throw new AuthBrowserError(domain, 'Failed to create visible page after fallback');
-          }
-          await this.page.goto(entryUrl, {
-            waitUntil: 'networkidle2',
-            timeout: 60000,
-          });
-        } else {
-          throw navError;
+      // Navigate with fallback handling
+      const navigated = await this.navigateWithFallback(entryUrl, domain);
+      if (!navigated && !(this.config.forceVisible || this.config.visibleMode)) {
+        await this.launchBrowser(false);
+        if (!this.page) {
+          throw new AuthBrowserError(domain, 'Failed to create visible page after fallback');
         }
+        await navigateWithTimeout(this.page, entryUrl, VISIBLE_NAV_TIMEOUT_MS);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      let currentUrl = this.page.url();
-      console.log(`📍 Current URL: ${currentUrl.substring(0, 80)}...`);
-
       // Check if already authenticated
+      const currentUrl = this.page.url();
       const isAuthenticated = isTeams
-        ? isTeamsUrl(currentUrl) && !this.isLoginUrl(currentUrl)
-        : currentUrl.includes(domain) && !this.isLoginUrl(currentUrl);
+        ? isTeamsUrl(currentUrl) && !isLoginUrl(currentUrl)
+        : currentUrl.includes(domain) && !isLoginUrl(currentUrl);
 
       if (!isAuthenticated) {
-        // Handle SSO flow
-        const MAX_SSO_RETRIES = 3;
-        let authSuccess = false;
-
-        for (let attempt = 1; attempt <= MAX_SSO_RETRIES; attempt++) {
-          console.log(`\n📋 SSO Attempt ${attempt}/${MAX_SSO_RETRIES}`);
-
-          const result = await this.attemptHeadlessAuth(isTeams ? 'teams.microsoft.com' : domain);
-
-          if (result.success) {
-            authSuccess = true;
-            break;
-          }
-
-          if (result.needsUserInteraction && !this.visibleMode) {
-            console.log('🔄 Switching to visible browser for user interaction...');
-
-            // Save current state
-            const savedUrl = this.page?.url() || '';
-            const savedCookies = this.page ? await this.page.cookies() : [];
-
-            // Switch to visible browser
-            await this.launchBrowser(false);
-
-            if (!this.page) {
-              throw new AuthBrowserError(domain, 'Failed to create visible page');
-            }
-
-            // Restore cookies
-            if (savedCookies.length > 0) {
-              await this.page.setCookie(...savedCookies);
-            }
-
-            // Navigate to saved URL or entry URL
-            await this.page.goto(savedUrl || entryUrl, {
-              waitUntil: 'networkidle2',
-              timeout: 30000,
-            });
-
-            // Show alert to user
-            await this.page.evaluate(() => {
-              alert('Please authenticate to use the SAP MCP servers.\n\nComplete the login process in this browser window.');
-            });
-          }
-
-          console.log('👤 Please complete authentication in the visible browser...');
-          authSuccess = await this.waitForAuthenticationCompletion(domain, isTeams);
-
-          if (authSuccess) break;
-        }
-
-        if (!authSuccess) {
-          throw new AuthBrowserError(domain, 'Authentication failed after all retries');
-        }
+        await this.runOAuthSsoFlow(entryUrl, domain, isTeams);
       } else {
-        console.log('✅ Already authenticated');
+        console.error('Already authenticated');
       }
 
       // Wait for page to stabilize
-      console.log('⏳ Waiting for page to stabilize...');
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await this.waitForStability();
 
-      // Try to wait for network idle
-      try {
-        await this.page.waitForNetworkIdle({ timeout: 10000 });
-      } catch {
-        console.log('⚠️ Network idle timeout, continuing anyway...');
-      }
+      // Extract cookies
+      const cookies = isTeams
+        ? await extractTeamsCookies(this.page)
+        : await extractCookies(this.page, domain);
+      console.error(`Retrieved ${cookies.length} cookies`);
 
-      // Get cookies from authenticated session
-      let cookies: StoredCookie[] = [];
-      if (isTeams) {
-        // Teams stores auth in various domains
-        const teamsDomains = [
-          'https://teams.microsoft.com',
-          'https://teams.cloud.microsoft',
-          'https://teams.live.com',
-          'https://teams.office.com',
-          'https://login.microsoftonline.com',
-          'https://login.live.com',
-        ];
+      // Extract tokens
+      const tokens = await extractTokens(this.page, targetAudiences);
+      console.error(`Extracted ${tokens.length} token(s)`);
 
-        for (const teamsDomain of teamsDomains) {
-          try {
-            const domainCookies = await this.page.cookies(teamsDomain);
-            for (const c of domainCookies) {
-              cookies.push({
-                name: c.name,
-                value: c.value,
-                domain: c.domain,
-                path: c.path,
-                expires: c.expires,
-                httpOnly: c.httpOnly,
-                secure: c.secure,
-                sameSite: c.sameSite as 'Strict' | 'Lax' | 'None' | undefined,
-              });
-            }
-          } catch {
-            // Some domains may not have cookies
-          }
-        }
-
-        // Also get current page cookies
-        const pageCookies = await this.page.cookies();
-        for (const c of pageCookies) {
-          cookies.push({
-            name: c.name,
-            value: c.value,
-            domain: c.domain,
-            path: c.path,
-            expires: c.expires,
-            httpOnly: c.httpOnly,
-            secure: c.secure,
-            sameSite: c.sameSite as 'Strict' | 'Lax' | 'None' | undefined,
-          });
-        }
-
-        // Remove duplicates by name+domain
-        const seen = new Set<string>();
-        cookies = cookies.filter((c) => {
-          const key = `${c.name}:${c.domain}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      } else {
-        cookies = await this.extractCookies(domain);
-      }
-
-      console.log(`🍪 Retrieved ${cookies.length} cookies`);
-
-      // Extract tokens from localStorage
-      const tokens = await this.extractTokens(targetAudiences);
-      console.log(`🔑 Extracted ${tokens.length} token(s)`);
-
-      // Extract MSAL refresh token and account info
-      const msalData = await this.extractMsalRefreshToken();
+      // Extract MSAL data
+      const msalData = await extractMsalRefreshToken(this.page);
       if (msalData.refreshToken) {
-        console.log(`🔄 Extracted refresh token for client ${msalData.refreshToken.clientId}`);
+        console.error(`Extracted refresh token for client ${msalData.refreshToken.clientId}`);
       }
       if (msalData.account) {
-        console.log(`👤 Extracted account info for ${msalData.account.username}`);
+        console.error(`Extracted account info for ${msalData.account.username}`);
       }
 
       await this.safeBrowserClose();
@@ -1280,180 +247,224 @@ export class BrowserAuthenticator {
       };
     } catch (error) {
       await this.emergencyCleanup();
-      if (error instanceof AuthBrowserError) {
-        throw error;
-      }
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new AuthBrowserError(
-        domain,
-        `${errorMessage}`,
-      );
+      throw this.wrapError(error, domain);
     }
   }
 
-  /**
-   * Extract OAuth tokens from localStorage
-   */
-  private async extractTokens(targetAudiences: string[]): Promise<StoredToken[]> {
-    if (!this.page) return [];
+  // ============================================================================
+  // Private Helper Methods
+  // ============================================================================
 
-    // Get all localStorage items
-    const localStorageData = await this.page.evaluate(() => {
-      const result: { key: string; value: string }[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key) {
-          const value = localStorage.getItem(key);
-          if (value) {
-            result.push({ key, value });
-          }
-        }
-      }
-      return result;
-    });
-
-    const tokens: StoredToken[] = [];
-    const jwtPattern = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
-
-    for (const item of localStorageData) {
-      const matches = item.value.match(jwtPattern);
-      if (matches) {
-        for (const jwt of matches) {
-          const tokenInfo = parseJwt(jwt);
-          if (tokenInfo) {
-            // Check if audience matches any target
-            const isTargetAudience = targetAudiences.some(
-              (aud) =>
-                tokenInfo.audience.includes(aud) ||
-                aud.includes(tokenInfo.audience),
-            );
-
-            if (isTargetAudience && tokenInfo.expiresAt > Date.now() / 1000) {
-              tokens.push({
-                token: jwt,
-                audience: tokenInfo.audience,
-                expiresAt: tokenInfo.expiresAt,
-                scopes: tokenInfo.scopes || [],
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // Deduplicate by token prefix
-    const uniqueTokens = new Map<string, StoredToken>();
-    for (const token of tokens) {
-      const key = token.token.substring(0, 50);
-      const existing = uniqueTokens.get(key);
-      if (!existing || token.expiresAt > existing.expiresAt) {
-        uniqueTokens.set(key, token);
-      }
-    }
-
-    return Array.from(uniqueTokens.values());
-  }
-
-  /**
-   * Extract MSAL refresh token and account info from localStorage
-   * MSAL stores refresh tokens in a specific format with keys like:
-   * {homeAccountId}-{environment}-refreshtoken-{clientId}----
-   */
-  private async extractMsalRefreshToken(): Promise<{
-    refreshToken?: StoredRefreshToken;
-    account?: {
-      homeAccountId: string;
-      environment: string;
-      tenantId: string;
-      username: string;
-      name?: string;
-    };
-  }> {
-    if (!this.page) return {};
-
+  private resolveDomain(entryUrl: string, domain: string, fallback: string): string {
+    if (domain) return domain;
     try {
-      const msalData = await this.page.evaluate(() => {
-        const result: {
-          refreshToken?: {
-            secret: string;
-            clientId: string;
-            homeAccountId: string;
-            environment: string;
-            expiresOn?: number;
-          };
-          account?: {
-            homeAccountId: string;
-            environment: string;
-            tenantId: string;
-            username: string;
-            name?: string;
-          };
-        } = {};
-
-        // Find refresh token entries (key pattern: *-refreshtoken-*)
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key && key.includes('-refreshtoken-')) {
-            try {
-              const value = localStorage.getItem(key);
-              if (value) {
-                const parsed = JSON.parse(value);
-                if (parsed.credentialType === 'RefreshToken' && parsed.secret) {
-                  result.refreshToken = {
-                    secret: parsed.secret,
-                    clientId: parsed.clientId,
-                    homeAccountId: parsed.homeAccountId,
-                    environment: parsed.environment,
-                    expiresOn: parsed.expiresOn ? parseInt(parsed.expiresOn, 10) : undefined,
-                  };
-                  break; // Take the first refresh token found
-                }
-              }
-            } catch {
-              // Skip invalid JSON
-            }
-          }
-        }
-
-        // Find account info (key pattern: msal.account.keys or direct account entry)
-        const accountKeysStr = localStorage.getItem('msal.account.keys');
-        if (accountKeysStr) {
-          try {
-            const accountKeys = JSON.parse(accountKeysStr);
-            if (Array.isArray(accountKeys) && accountKeys.length > 0) {
-              const accountData = localStorage.getItem(accountKeys[0]);
-              if (accountData) {
-                const parsed = JSON.parse(accountData);
-                result.account = {
-                  homeAccountId: parsed.homeAccountId,
-                  environment: parsed.environment,
-                  tenantId: parsed.realm || parsed.tenantId,
-                  username: parsed.username,
-                  name: parsed.name,
-                };
-              }
-            }
-          } catch {
-            // Skip invalid JSON
-          }
-        }
-
-        return result;
-      });
-
-      return msalData;
-    } catch (error) {
-      console.warn('⚠️ Failed to extract MSAL refresh token:', error);
-      return {};
+      return new URL(entryUrl).hostname;
+    } catch {
+      return fallback;
     }
   }
 
-  /**
-   * Clean up any lingering Chrome processes - can be called externally
-   */
-  async cleanupChromeProcesses(): Promise<void> {
-    console.log('🧹 Manual cleanup: searching for lingering Chrome processes...');
-    await this.killRemainingChromeProcesses();
-    console.log('✅ Manual cleanup completed');
+  private logAuthStart(target: string, entryUrl: string): void {
+    console.error(`Authenticating with ${target}...`);
+    console.error(`Entry URL: ${entryUrl}`);
+    if (this.config.userEmail) {
+      console.error(`SAP Auth Account: ${this.config.userEmail}`);
+    }
+  }
+
+  private async navigateWithFallback(url: string, domain: string): Promise<boolean> {
+    if (!this.page) return false;
+    console.error(`Navigating to ${url}...`);
+    try {
+      await navigateWithTimeout(this.page, url);
+      await delay(NAV_SETTLE_MS);
+      console.error(`Current URL: ${this.page.url().substring(0, URL_TRUNCATION_LENGTH)}...`);
+      return true;
+    } catch (navError) {
+      const navErrorMsg = navError instanceof Error ? navError.message : 'Unknown error';
+      console.error(`Navigation issue: ${navErrorMsg}`);
+      if (shouldFallbackToVisible(navErrorMsg)) {
+        console.error('Navigation blocked - switching to visible browser...');
+        await this.safeBrowserClose();
+        return false;
+      }
+      throw navError;
+    }
+  }
+
+  private async extractAndClose(domain: string): Promise<StoredCookie[]> {
+    const cookies = await extractCookies(this.page!, domain);
+    await this.safeBrowserClose();
+    return cookies;
+  }
+
+  private async authenticateWithVisibleMode(
+    entryUrl: string,
+    domain: string,
+  ): Promise<StoredCookie[]> {
+    await this.launchBrowser(false);
+    if (!this.page) {
+      throw new AuthBrowserError(domain, 'Failed to create visible page');
+    }
+
+    console.error('Running automated authentication in visible browser...');
+    await navigateWithTimeout(this.page, entryUrl, VISIBLE_NAV_TIMEOUT_MS);
+    await delay(NAV_SETTLE_MS);
+
+    // Check if already authenticated
+    if (this.page.url().includes(domain) && !isLoginUrl(this.page.url())) {
+      console.error('Already authenticated');
+      return await this.extractAndClose(domain);
+    }
+
+    // Try automated flow
+    const result = await attemptHeadlessAuth(
+      this.page,
+      domain,
+      this.config.userEmail,
+      this.config.forceManualFallback,
+    );
+
+    if (result.success) {
+      return await this.extractAndClose(domain);
+    }
+
+    // Wait for user
+    console.error('Please complete authentication in the visible browser...');
+    const success = await waitForAuthenticationCompletion(this.page, domain);
+    if (!success) {
+      throw new AuthBrowserError(domain, 'Authentication timeout');
+    }
+
+    return await this.extractAndClose(domain);
+  }
+
+  private async runSsoFlow(entryUrl: string, domain: string): Promise<StoredCookie[]> {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      console.error(`\nSSO Attempt ${attempt}/${MAX_RETRIES}`);
+
+      const result = await attemptHeadlessAuth(
+        this.page!,
+        domain,
+        this.config.userEmail,
+        this.config.forceManualFallback,
+      );
+
+      if (result.success) {
+        return await this.extractAndClose(domain);
+      }
+
+      if (result.needsUserInteraction) {
+        return await this.switchToVisibleForCompletion(entryUrl, domain);
+      }
+
+      if (attempt < MAX_RETRIES) {
+        console.error(`Retrying SSO (attempt ${attempt + 1}/${MAX_RETRIES})...`);
+        await delay(RETRY_DELAY_MS);
+      }
+    }
+
+    console.error('\nAll SSO attempts exhausted, falling back to visible browser');
+    return await this.switchToVisibleForCompletion(entryUrl, domain);
+  }
+
+  private async runOAuthSsoFlow(
+    entryUrl: string,
+    domain: string,
+    isTeams: boolean,
+  ): Promise<void> {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      console.error(`\nSSO Attempt ${attempt}/${MAX_RETRIES}`);
+
+      const result = await attemptHeadlessAuth(
+        this.page!,
+        isTeams ? 'teams.microsoft.com' : domain,
+        this.config.userEmail,
+        this.config.forceManualFallback,
+      );
+
+      if (result.success) return;
+
+      if (result.needsUserInteraction && !this.config.visibleMode) {
+        await this.switchToVisibleForOAuth(entryUrl, domain, isTeams);
+        return;
+      }
+
+      console.error('Please complete authentication in the visible browser...');
+      const success = await waitForAuthenticationCompletion(this.page!, domain, isTeams);
+      if (success) return;
+    }
+
+    throw new AuthBrowserError(domain, 'Authentication failed after all retries');
+  }
+
+  private async switchToVisibleForCompletion(
+    entryUrl: string,
+    domain: string,
+  ): Promise<StoredCookie[]> {
+    const currentUrl = this.page?.url() || '';
+    const currentCookies = this.page ? await this.page.cookies() : [];
+
+    await this.launchBrowser(false);
+    if (!this.page) {
+      throw new AuthBrowserError(domain, 'Failed to create visible page');
+    }
+
+    if (currentCookies.length > 0) {
+      await this.page.setCookie(...currentCookies);
+      console.error(`Restored ${currentCookies.length} cookies to visible browser`);
+    }
+
+    const targetUrl = currentUrl && !currentUrl.startsWith('about:') ? currentUrl : entryUrl;
+    await navigateWithTimeout(this.page, targetUrl, targetUrl === entryUrl ? VISIBLE_NAV_TIMEOUT_MS : FALLBACK_NAV_TIMEOUT_MS);
+
+    console.error('Visible browser ready for user interaction');
+    await showAuthAlert(this.page);
+
+    const success = await waitForAuthenticationCompletion(this.page, domain);
+    if (!success) {
+      throw new AuthBrowserError(domain, 'Authentication timeout after switching to visible mode');
+    }
+
+    return await this.extractAndClose(domain);
+  }
+
+  private async switchToVisibleForOAuth(
+    entryUrl: string,
+    domain: string,
+    isTeams: boolean,
+  ): Promise<void> {
+    console.error('Switching to visible browser for user interaction...');
+
+    const savedUrl = this.page?.url() || '';
+    const savedCookies = this.page ? await this.page.cookies() : [];
+
+    await this.launchBrowser(false);
+    if (!this.page) {
+      throw new AuthBrowserError(domain, 'Failed to create visible page');
+    }
+
+    if (savedCookies.length > 0) {
+      await this.page.setCookie(...savedCookies);
+    }
+
+    await navigateWithTimeout(this.page, savedUrl || entryUrl, FALLBACK_NAV_TIMEOUT_MS);
+    await showAuthAlert(this.page);
+  }
+
+  private async waitForStability(): Promise<void> {
+    if (!this.page) return;
+    console.error('Waiting for page to stabilize...');
+    await delay(NAV_SETTLE_MS);
+    try {
+      await this.page.waitForNetworkIdle({ timeout: NETWORK_IDLE_TIMEOUT_MS });
+    } catch {
+      console.error('Network idle timeout, continuing anyway...');
+    }
+  }
+
+  private wrapError(error: unknown, domain: string): AuthBrowserError {
+    if (error instanceof AuthBrowserError) return error;
+    return new AuthBrowserError(domain, extractErrorMessage(error));
   }
 }

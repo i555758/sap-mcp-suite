@@ -4,18 +4,15 @@
  * Test script to verify the new reviewers functionality
  */
 
-const { GitHubApiService } = require('./build/services/github-api.js');
-const { ConfigService } = require('./build/services/config-service.js');
+const { GitHubApiService } = require('./dist/services/github-api.js');
 
 async function testReviewersFeature() {
   console.log('Testing GitHub PR reviewers functionality...\n');
 
   // Mock configuration for testing
-  const configService = new ConfigService();
   const apiService = new GitHubApiService(
     'https://api.github.com',
-    'mock-token',
-    configService
+    'mock-token'
   );
 
   // Test 1: Check if requestReviewers method exists

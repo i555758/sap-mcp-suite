@@ -2,7 +2,7 @@
  * SAP Auth - Shared authentication package for SAP MCP servers
  *
  * Usage:
- *   import { AuthManager, getAuth } from '@anthropic/sap-auth';
+ *   import { AuthManager, getAuth } from 'sap-auth';
  *
  *   // Get credentials for a provider
  *   const auth = AuthManager.getInstance();
@@ -69,6 +69,15 @@ export { ApiTokenMethod } from './methods/api-token.js';
 // Browser authenticator (for advanced use)
 export { BrowserAuthenticator } from './browser/index.js';
 
-// MCP helpers (for consistent error handling)
-export { formatAuthError, isAuthError } from './mcp-helpers.js';
-export type { McpErrorResponse } from './mcp-helpers.js';
+// MCP auth helpers (for consistent auth error handling)
+export {
+  formatAuthError,
+  isAuthError,
+  credentialsToHeaders,
+} from './mcp-helpers.js';
+
+// Re-export McpErrorResponse from mcp-utils (single source of truth)
+export type { McpErrorResponse } from 'mcp-utils';
+
+// HTTP utilities (for cross-platform compatibility)
+export { buildUserAgent, buildSecChPlatform } from './utils/index.js';
