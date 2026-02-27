@@ -7,6 +7,7 @@
 import { AuthError } from "sap-auth";
 import { stripHtml } from "mcp-utils";
 import { TeamsAuthManager } from "../services/auth.js";
+import { GraphApiClient } from "./graph-api.js";
 import { createLogger } from "../logger.js";
 import type {
   Conversation,
@@ -49,6 +50,21 @@ export interface ConversationMember {
 // ============================================================================
 
 /**
+ * Extract user IDs from a private chat conversation ID
+ * Format: 19:{userId1}_{userId2}@unq.gbl.spaces
+ */
+function extractUserIdsFromConversationId(conversationId: string): string[] | null {
+  // Match pattern: 19:{guid}_{guid}@unq.gbl.spaces
+  const match = conversationId.match(
+    /^19:([a-f0-9-]+)_([a-f0-9-]+)@unq\.gbl\.spaces$/i
+  );
+  if (match) {
+    return [match[1], match[2]];
+  }
+  return null;
+}
+
+/**
  * Parse time string to Date
  */
 function parseTime(timeStr: string | undefined): Date | null {
@@ -66,11 +82,28 @@ function parseTime(timeStr: string | undefined): Date | null {
 
 export class TeamsApiClient {
   private authManager: TeamsAuthManager;
+  private graphClient: GraphApiClient;
   private apiBase: string;
+  private myUserId: string | null = null;
 
-  constructor(authManager: TeamsAuthManager) {
+  constructor(authManager: TeamsAuthManager, graphClient: GraphApiClient) {
     this.authManager = authManager;
+    this.graphClient = graphClient;
     this.apiBase = authManager.getApiBase();
+  }
+
+  /**
+   * Get the current user's ID (cached)
+   */
+  private async getMyUserId(): Promise<string | null> {
+    if (this.myUserId) return this.myUserId;
+    try {
+      const me = await this.graphClient.getMe();
+      this.myUserId = me.id;
+      return this.myUserId;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -178,21 +211,94 @@ export class TeamsApiClient {
 
   /**
    * Search conversations by query
+   * For private chats, resolves user IDs to names using Graph API
    */
   async searchConversations(
     query: string,
     limit: number = 10,
   ): Promise<Conversation[]> {
-    const conversations = await this.getConversations({
-      limit: 100,
-      search: query,
-    });
-    return conversations.slice(0, limit);
+    const allConversations = await this.getConversations({ limit: 100 });
+    const searchLower = query.toLowerCase();
+    const myUserId = await this.getMyUserId();
+
+    // First, try basic search (topic, message preview)
+    const basicMatches = allConversations.filter(
+      (c) =>
+        c.topic?.toLowerCase().includes(searchLower) ||
+        c.lastMessage?.preview?.toLowerCase().includes(searchLower) ||
+        c.lastMessage?.from?.toLowerCase().includes(searchLower),
+    );
+
+    if (basicMatches.length >= limit) {
+      return basicMatches.slice(0, limit);
+    }
+
+    // For private chats (topic is "Private Chat"), resolve user IDs to names
+    const privateChats = allConversations.filter(
+      (c) => c.topic === "Private Chat" && extractUserIdsFromConversationId(c.id),
+    );
+
+    // Collect all other-user IDs to resolve
+    const userIdsToResolve = new Set<string>();
+    for (const chat of privateChats) {
+      const userIds = extractUserIdsFromConversationId(chat.id);
+      if (userIds) {
+        for (const id of userIds) {
+          if (id !== myUserId) {
+            userIdsToResolve.add(id);
+          }
+        }
+      }
+    }
+
+    // Batch resolve user names via Graph API
+    const userMap = await this.graphClient.getUsersByIds([...userIdsToResolve]);
+
+    // Match private chats by resolved user names
+    const privateMatches: Conversation[] = [];
+    for (const chat of privateChats) {
+      // Skip if already matched in basic search
+      if (basicMatches.some((m) => m.id === chat.id)) continue;
+
+      const userIds = extractUserIdsFromConversationId(chat.id);
+      if (!userIds) continue;
+
+      // Find the other person's ID
+      const otherUserId = userIds.find((id) => id !== myUserId);
+      if (!otherUserId) continue;
+
+      const user = userMap.get(otherUserId);
+      if (user) {
+        const nameMatch =
+          user.displayName?.toLowerCase().includes(searchLower) ||
+          user.mail?.toLowerCase().includes(searchLower) ||
+          user.givenName?.toLowerCase().includes(searchLower) ||
+          user.surname?.toLowerCase().includes(searchLower);
+
+        if (nameMatch) {
+          // Enrich conversation with resolved name
+          privateMatches.push({
+            ...chat,
+            topic: user.displayName || "Private Chat",
+            resolvedUser: {
+              id: otherUserId,
+              displayName: user.displayName,
+              email: user.mail,
+            },
+          });
+        }
+      }
+    }
+
+    // Combine results
+    const combined = [...basicMatches, ...privateMatches];
+    return combined.slice(0, limit);
   }
 
   /**
    * Find 1:1 private conversation with a specific person
    * This searches for direct chats (not group chats or meetings)
+   * Uses Graph API to resolve user IDs to names
    *
    * @param personName - Name or partial name of the person
    * @returns The 1:1 conversation if found, null otherwise
@@ -200,46 +306,57 @@ export class TeamsApiClient {
   async findPrivateChat(personName: string): Promise<Conversation | null> {
     const conversations = await this.getConversations({ limit: 100 });
     const searchLower = personName.toLowerCase();
+    const myUserId = await this.getMyUserId();
 
-    // Filter for 1:1 private chats
-    // Teams uses various type names: "OneOnOne", "Chat", etc.
-    // 1:1 chats typically have exactly 2 members and type contains "Chat" or "OneOnOne"
+    // Only look at private chats (format: 19:{guid}_{guid}@unq.gbl.spaces)
     const privateChats = conversations.filter((c) => {
-      // Check if it's a 1:1 type conversation
-      const isOneOnOne =
-        c.type?.toLowerCase().includes("chat") ||
-        c.type?.toLowerCase().includes("oneonone") ||
-        c.type?.toLowerCase() === "conversation";
-
-      // 1:1 chats should have 2 members (self + other person)
-      const hasTwoMembers = c.members && c.members.length === 2;
-
-      // Exclude group chats and meetings
-      const isNotGroup =
-        !c.type?.toLowerCase().includes("group") &&
-        !c.type?.toLowerCase().includes("meeting") &&
-        !c.type?.toLowerCase().includes("space");
-
-      return isOneOnOne && hasTwoMembers && isNotGroup;
+      const userIds = extractUserIdsFromConversationId(c.id);
+      return userIds !== null;
     });
 
-    // Find the conversation where the other person matches the search
+    // Collect all other-user IDs to resolve
+    const userIdsToResolve = new Set<string>();
     for (const chat of privateChats) {
-      // Check if any member matches the person name
-      const memberMatches = chat.members?.some((m) =>
-        m?.toLowerCase().includes(searchLower),
-      );
+      const userIds = extractUserIdsFromConversationId(chat.id);
+      if (userIds) {
+        for (const id of userIds) {
+          if (id !== myUserId) {
+            userIdsToResolve.add(id);
+          }
+        }
+      }
+    }
 
-      // Also check the topic/title which often contains the person's name
-      const topicMatches = chat.topic?.toLowerCase().includes(searchLower);
+    // Batch resolve user names via Graph API
+    const userMap = await this.graphClient.getUsersByIds([...userIdsToResolve]);
 
-      // Check last message sender
-      const lastMessageMatches = chat.lastMessage?.from
-        ?.toLowerCase()
-        .includes(searchLower);
+    // Find matching private chat
+    for (const chat of privateChats) {
+      const userIds = extractUserIdsFromConversationId(chat.id);
+      if (!userIds) continue;
 
-      if (memberMatches || topicMatches || lastMessageMatches) {
-        return chat;
+      const otherUserId = userIds.find((id) => id !== myUserId);
+      if (!otherUserId) continue;
+
+      const user = userMap.get(otherUserId);
+      if (user) {
+        const nameMatch =
+          user.displayName?.toLowerCase().includes(searchLower) ||
+          user.mail?.toLowerCase().includes(searchLower) ||
+          user.givenName?.toLowerCase().includes(searchLower) ||
+          user.surname?.toLowerCase().includes(searchLower);
+
+        if (nameMatch) {
+          return {
+            ...chat,
+            topic: user.displayName || "Private Chat",
+            resolvedUser: {
+              id: otherUserId,
+              displayName: user.displayName,
+              email: user.mail,
+            },
+          };
+        }
       }
     }
 
@@ -314,17 +431,6 @@ export class TeamsApiClient {
     }
 
     return members;
-  }
-
-  /**
-   * Get conversations active in a time range
-   */
-  async getConversationsByTime(
-    since: Date,
-    until?: Date,
-    limit: number = 50,
-  ): Promise<Conversation[]> {
-    return this.getConversations({ limit, since, until });
   }
 
   // ==========================================================================
@@ -481,17 +587,6 @@ export class TeamsApiClient {
       messageId: result.id,
       arrivalTime: result.OriginalArrivalTime,
     };
-  }
-
-  /**
-   * Search messages in a conversation
-   */
-  async searchMessages(
-    conversationId: string,
-    query: string,
-    limit: number = 20,
-  ): Promise<Message[]> {
-    return this.getMessages(conversationId, { limit, search: query });
   }
 
   // ==========================================================================

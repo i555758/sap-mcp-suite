@@ -1,9 +1,7 @@
 /**
  * Conversation handlers for Teams MCP
  *
- * Handles: teams_web_conversations, teams_web_messages, teams_web_search_conversation,
- * teams_web_conversations_by_time, teams_web_search_messages, teams_web_summarize,
- * teams_web_find_private_chat, teams_web_members
+ * Handles: teams_web_conversations, teams_web_messages, teams_web_find_private_chat, teams_web_members
  */
 
 import { z } from "zod";
@@ -14,6 +12,7 @@ import type { TeamsHandlerContext } from "./types.js";
 
 /**
  * Handle teams_web_conversations
+ * Unified handler for listing, searching, and filtering conversations
  */
 export async function handleConversations(
   apiClient: TeamsApiClient,
@@ -26,17 +25,28 @@ export async function handleConversations(
 ) {
   const { limit = 20, since, until, search } = args;
 
+  // If search is provided, use the enhanced search that resolves private chat names
+  if (search) {
+    const conversations = await apiClient.searchConversations(search, limit);
+    return jsonResponse({
+      conversations,
+      count: conversations.length,
+      query: search,
+    });
+  }
+
+  // Otherwise, get conversations with optional time filtering
   const conversations = await apiClient.getConversations({
     limit,
     since: since ? new Date(since) : undefined,
     until: until ? new Date(until) : undefined,
-    search,
   });
   return jsonResponse({ conversations, count: conversations.length });
 }
 
 /**
  * Handle teams_web_messages
+ * Unified handler for getting messages with optional search/filtering
  */
 export async function handleMessages(
   apiClient: TeamsApiClient,
@@ -57,100 +67,6 @@ export async function handleMessages(
     search,
   });
   return jsonResponse({ messages, count: messages.length });
-}
-
-/**
- * Handle teams_web_search_conversation
- */
-export async function handleSearchConversation(
-  apiClient: TeamsApiClient,
-  args: {
-    query: string;
-    limit?: number;
-  },
-) {
-  const { query, limit = 10 } = args;
-
-  const conversations = await apiClient.searchConversations(query, limit);
-  return jsonResponse({
-    conversations,
-    count: conversations.length,
-    query,
-  });
-}
-
-/**
- * Handle teams_web_conversations_by_time
- */
-export async function handleConversationsByTime(
-  apiClient: TeamsApiClient,
-  args: {
-    since: string;
-    until?: string;
-    limit?: number;
-  },
-) {
-  const { since, until, limit = 50 } = args;
-
-  const conversations = await apiClient.getConversationsByTime(
-    new Date(since),
-    until ? new Date(until) : undefined,
-    limit,
-  );
-  return jsonResponse({
-    conversations,
-    count: conversations.length,
-    timeRange: { since, until: until || "now" },
-  });
-}
-
-/**
- * Handle teams_web_search_messages
- */
-export async function handleSearchMessages(
-  apiClient: TeamsApiClient,
-  args: {
-    conversationId: string;
-    query: string;
-    limit?: number;
-  },
-) {
-  const { conversationId, query, limit = 20 } = args;
-
-  const messages = await apiClient.searchMessages(
-    conversationId,
-    query,
-    limit,
-  );
-  return jsonResponse({
-    messages,
-    count: messages.length,
-    query,
-  });
-}
-
-/**
- * Handle teams_web_summarize
- */
-export async function handleSummarize(
-  apiClient: TeamsApiClient,
-  args: {
-    conversationId: string;
-    messageCount?: number;
-    since?: string;
-  },
-) {
-  const { conversationId, messageCount = 50, since } = args;
-
-  const result = await apiClient.getMessagesForSummary(
-    conversationId,
-    messageCount,
-    since ? new Date(since) : undefined,
-  );
-  return jsonResponse({
-    ...result,
-    hint: "Use these messages to generate a summary. Look for key decisions, action items, and important discussions.",
-  });
 }
 
 /**
@@ -175,7 +91,7 @@ export async function handleFindPrivateChat(
     return jsonResponse({
       found: false,
       personName,
-      hint: "No 1:1 private chat found with this person. Try using teams_web_search_conversation to find group chats or meetings containing this person.",
+      hint: "No 1:1 private chat found with this person. Try using teams_web_conversations with search parameter.",
     });
   }
 }
@@ -195,7 +111,6 @@ export async function handleMembers(
   return jsonResponse({
     members,
     count: members.length,
-    hint: "Display names are populated from recent message senders. Members who haven't sent messages recently may not have display names.",
   });
 }
 
@@ -210,18 +125,18 @@ export function registerConversationHandlers(context: TeamsHandlerContext): void
     onAuthError: (error: unknown) => formatAuthError(error),
   };
 
-  // teams_web_conversations tool
+  // teams_web_conversations - unified conversation listing and search
   server.registerTool(
     "teams_web_conversations",
     {
-      title: "Teams Web Conversations",
+      title: "Teams Conversations",
       description:
-        "List recent Microsoft Teams conversations. Can filter by time range or search term.",
+        "List or search Teams conversations. Use 'search' to find conversations by name, topic, or participant (including private chats). Use 'since'/'until' to filter by time range.",
       inputSchema: {
         limit: z.number().optional().describe("Max conversations to return (default: 20)"),
         since: z.string().optional().describe("ISO date string - only conversations with activity after this time"),
         until: z.string().optional().describe("ISO date string - only conversations with activity before this time"),
-        search: z.string().optional().describe("Search term to filter by topic, message content, or members"),
+        search: z.string().optional().describe("Search query - finds conversations by topic, participant name, or message content. For private chats, resolves user names from IDs. Use 'Surname, Name' format or just surname for best results."),
       },
     },
     wrapToolHandler(
@@ -231,15 +146,15 @@ export function registerConversationHandlers(context: TeamsHandlerContext): void
     )
   );
 
-  // teams_web_messages tool
+  // teams_web_messages - unified message listing and search
   server.registerTool(
     "teams_web_messages",
     {
-      title: "Teams Web Messages",
-      description: "Get messages from a Teams conversation. Can filter by time range or search term.",
+      title: "Teams Messages",
+      description: "Get messages from a Teams conversation. Use 'search' to filter messages, 'since'/'until' for time range. For summarization, set limit=50 or higher.",
       inputSchema: {
         conversationId: z.string().describe("Conversation ID (required)"),
-        limit: z.number().optional().describe("Max messages (default: 20)"),
+        limit: z.number().optional().describe("Max messages (default: 20, use 50+ for summarization)"),
         since: z.string().optional().describe("ISO date string - only messages after this time"),
         until: z.string().optional().describe("ISO date string - only messages before this time"),
         search: z.string().optional().describe("Search term to filter messages"),
@@ -252,89 +167,14 @@ export function registerConversationHandlers(context: TeamsHandlerContext): void
     )
   );
 
-  // teams_web_search_conversation tool
-  server.registerTool(
-    "teams_web_search_conversation",
-    {
-      title: "Teams Web Search Conversation",
-      description: "Search for a Teams conversation by name, topic, or participant",
-      inputSchema: {
-        query: z.string().describe("Search query - name, topic, or email (required)"),
-        limit: z.number().optional().describe("Max results (default: 10)"),
-      },
-    },
-    wrapToolHandler(
-      (args: { query: string; limit?: number }) =>
-        handleSearchConversation(apiClient, args),
-      errorOptions
-    )
-  );
-
-  // teams_web_conversations_by_time tool
-  server.registerTool(
-    "teams_web_conversations_by_time",
-    {
-      title: "Teams Web Conversations By Time",
-      description: "Get all Teams conversations with activity in a specific time range",
-      inputSchema: {
-        since: z.string().describe("ISO date string - start of time range (required)"),
-        until: z.string().optional().describe("ISO date string - end of time range (default: now)"),
-        limit: z.number().optional().describe("Max conversations (default: 50)"),
-      },
-    },
-    wrapToolHandler(
-      (args: { since: string; until?: string; limit?: number }) =>
-        handleConversationsByTime(apiClient, args),
-      errorOptions
-    )
-  );
-
-  // teams_web_search_messages tool
-  server.registerTool(
-    "teams_web_search_messages",
-    {
-      title: "Teams Web Search Messages",
-      description: "Search for specific messages within a Teams conversation",
-      inputSchema: {
-        conversationId: z.string().describe("Conversation ID (required)"),
-        query: z.string().describe("Search query (required)"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
-      },
-    },
-    wrapToolHandler(
-      (args: { conversationId: string; query: string; limit?: number }) =>
-        handleSearchMessages(apiClient, args),
-      errorOptions
-    )
-  );
-
-  // teams_web_summarize tool
-  server.registerTool(
-    "teams_web_summarize",
-    {
-      title: "Teams Web Summarize",
-      description: "Get conversation messages for summarization. Returns recent messages that can be summarized by the AI.",
-      inputSchema: {
-        conversationId: z.string().describe("Conversation ID (required)"),
-        messageCount: z.number().optional().describe("Number of recent messages to include (default: 50)"),
-        since: z.string().optional().describe("ISO date string - only messages after this time"),
-      },
-    },
-    wrapToolHandler(
-      (args: { conversationId: string; messageCount?: number; since?: string }) =>
-        handleSummarize(apiClient, args),
-      errorOptions
-    )
-  );
-
-  // teams_web_find_private_chat tool
+  // teams_web_find_private_chat - find 1:1 private chat
   server.registerTool(
     "teams_web_find_private_chat",
     {
-      title: "Teams Web Find Private Chat",
-      description: "Find the 1:1 private chat conversation with a specific person. Use this to get the conversation ID before sending a message to someone. Returns only direct private chats, not group chats or meetings.",
+      title: "Find Private Chat",
+      description: "Find the 1:1 private chat with a specific person. Returns only direct private chats, not group chats or meetings. Use this to get the conversation ID before sending a direct message.",
       inputSchema: {
-        personName: z.string().describe("Name or partial name of the person to find private chat with (required)"),
+        personName: z.string().describe("Name or partial name of the person (required). Use 'Surname, Name' format or just surname for best results."),
       },
     },
     wrapToolHandler(
@@ -344,12 +184,12 @@ export function registerConversationHandlers(context: TeamsHandlerContext): void
     )
   );
 
-  // teams_web_members tool
+  // teams_web_members - get conversation members
   server.registerTool(
     "teams_web_members",
     {
-      title: "Teams Web Members",
-      description: "Get all members of a Teams conversation. Returns member IDs, roles, and display names (when available from recent messages).",
+      title: "Teams Members",
+      description: "Get all members of a Teams conversation with their roles.",
       inputSchema: {
         conversationId: z.string().describe("Conversation ID (required)"),
       },

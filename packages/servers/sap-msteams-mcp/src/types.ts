@@ -77,6 +77,12 @@ export interface Conversation {
     from: string;
   };
   members?: string[];
+  /** Resolved user info for private chats (populated by search) */
+  resolvedUser?: {
+    id: string;
+    displayName?: string;
+    email?: string;
+  };
 }
 
 export interface ConversationListOptions {

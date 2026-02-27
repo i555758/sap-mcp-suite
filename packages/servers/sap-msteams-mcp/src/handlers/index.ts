@@ -8,10 +8,6 @@ export { TeamsHandlerContext } from "./types.js";
 export {
   handleConversations,
   handleMessages,
-  handleSearchConversation,
-  handleConversationsByTime,
-  handleSearchMessages,
-  handleSummarize,
   handleFindPrivateChat,
   handleMembers,
   registerConversationHandlers,

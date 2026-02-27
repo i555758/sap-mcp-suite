@@ -33,8 +33,8 @@ export class TeamsServer {
 
     // Initialize auth manager and API clients
     const authManager = new TeamsAuthManager(undefined, region);
-    const apiClient = new TeamsApiClient(authManager);
     const graphClient = new GraphApiClient(authManager);
+    const apiClient = new TeamsApiClient(authManager, graphClient);
 
     // Create handler context and register all tools
     const context: TeamsHandlerContext = {

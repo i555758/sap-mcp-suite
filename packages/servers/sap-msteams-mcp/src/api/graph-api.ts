@@ -236,6 +236,43 @@ export class GraphApiClient {
     const data = await this.graphRequest<any>(`/me`);
     return this.mapGraphUser(data);
   }
+
+  /**
+   * Get user by ID (GUID)
+   * Used to resolve user IDs from conversation IDs to display names
+   */
+  async getUserById(userId: string): Promise<GraphUser | null> {
+    try {
+      const data = await this.graphRequest<any>(`/users/${userId}`);
+      return this.mapGraphUser(data);
+    } catch (e: any) {
+      log.debug(`Failed to get user ${userId}: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get multiple users by IDs (batch)
+   * More efficient than individual calls
+   */
+  async getUsersByIds(userIds: string[]): Promise<Map<string, GraphUser>> {
+    const results = new Map<string, GraphUser>();
+
+    // Graph API batch requests for efficiency
+    const batchSize = 20;
+    for (let i = 0; i < userIds.length; i += batchSize) {
+      const batch = userIds.slice(i, i + batchSize);
+      const promises = batch.map(async (id) => {
+        const user = await this.getUserById(id);
+        if (user) {
+          results.set(id, user);
+        }
+      });
+      await Promise.all(promises);
+    }
+
+    return results;
+  }
 }
 
 export default GraphApiClient;
