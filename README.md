@@ -38,7 +38,7 @@ This fetches updates from the remote repository, rebuilds all servers, and detec
 | sap-jira-mcp | Jira tickets, search, JQL queries | SAP SSO |
 | sap-msteams-mcp | Teams chat, calendar, meetings, transcripts | OAuth2 |
 | sap-wiki-mcp | Confluence wiki search and content | SAP SSO |
-| mcp-github | GitHub API for tools.sap and wdf.sap.corp | PAT |
+| mcp-github | GitHub API for tools.sap and wdf.sap.corp | PAT (via sap-auth) |
 | playwright-mcp | Browser automation (used for auth flows) | - |
 
 ## Authentication
@@ -50,8 +50,10 @@ After installation, authenticate with SAP services using `sap_authenticate`:
 | Teams | `https://teams.cloud.microsoft/v2/` |
 | Jira | `https://jira.tools.sap/` |
 | Wiki | `https://wiki.one.int.sap/` |
+| GitHub (tools) | `https://github.tools.sap/` |
+| GitHub (wdf) | `https://github.wdf.sap.corp/` |
 
-Credentials are cached in `~/.sap-mcp/auth.json` and auto-refresh when possible (Teams OAuth). SSO cookies expire after ~8 hours and require re-authentication.
+Credentials are cached in `~/.sap-mcp/auth.json` and auto-refresh when possible (Teams OAuth). SSO cookies expire after ~8 hours and require re-authentication. GitHub PATs are stored centrally and don't expire.
 
 ## Structure
 

@@ -259,7 +259,7 @@ export class OAuthMethod extends AuthMethod<StoredOAuthAuth> {
   /**
    * Get earliest expiration time from all tokens
    */
-  protected getExpiresAt(stored: StoredOAuthAuth): Date | null {
+  getExpiresAt(stored: StoredOAuthAuth): Date | null {
     if (!stored.tokens || stored.tokens.length === 0) {
       return null;
     }

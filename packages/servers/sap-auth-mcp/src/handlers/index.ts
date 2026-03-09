@@ -10,7 +10,6 @@ export {
   handleMakeRequest,
   handleGetCookieInfo,
   handleClearCookies,
-  urlToProviderId,
   registerAuthHandlers,
 } from "./auth-handlers.js";
 

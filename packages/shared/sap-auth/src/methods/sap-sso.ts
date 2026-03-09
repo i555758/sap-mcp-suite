@@ -121,7 +121,7 @@ export class SapSsoMethod extends AuthMethod<StoredSapSsoAuth> {
   /**
    * Get expiration time
    */
-  protected getExpiresAt(stored: StoredSapSsoAuth): Date | null {
+  getExpiresAt(stored: StoredSapSsoAuth): Date | null {
     if (!stored.updatedAt) return null;
     const updatedAt = new Date(stored.updatedAt).getTime();
     return new Date(updatedAt + SSO_TOKEN_TTL_MS);

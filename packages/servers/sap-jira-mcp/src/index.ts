@@ -14,25 +14,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Get environment variables
-const JIRA_API_TOKEN: string | undefined = process.env.JIRA_API_TOKEN;
 const JIRA_DOMAIN = (process.env.JIRA_DOMAIN as string) || "jira.tools.sap";
 // Use the directory where index.js is located (dist/) if JIRA_CONFIG_DIR is not set
 // This ensures .jira-config.json is found regardless of where the command is run from
 const JIRA_CONFIG_DIR: string = process.env.JIRA_CONFIG_DIR || __dirname;
 
 // Initialize AuthManager (uses shared sap-auth package)
-const authManager = new AuthManager(JIRA_API_TOKEN);
+const authManager = new AuthManager();
 
 async function main() {
-  // Initialize auth manager (sets API token if provided)
-  await authManager.initialize();
-
   logger.info(`Starting Jira MCP server with:
 - JIRA_DOMAIN: ${JIRA_DOMAIN}
 - JIRA_CONFIG_DIR: ${JIRA_CONFIG_DIR}
 - Auth Storage: ${authManager.getCookieDir()}
 - Current working directory: ${process.cwd()}
-- Authentication: ${authManager.getAuthType()}
+- Authentication: lazy (resolved on first tool call)
 - Verbose logging: ${logger.isVerboseMode() ? `enabled (${logger.getLogFile()})` : "disabled"}`);
 
   // Create and run the server

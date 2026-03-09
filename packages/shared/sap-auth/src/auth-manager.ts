@@ -1,6 +1,10 @@
 /**
  * AuthManager - Main entry point for SAP auth
  *
+ * Single orchestrator pattern: AuthManager owns the full auth flow
+ * (storage I/O, method dispatch, credential type enforcement).
+ * Auth methods are stateless building blocks.
+ *
  * Usage:
  *   import { AuthManager } from 'sap-auth';
  *
@@ -11,9 +15,12 @@
 
 import type {
   Credentials,
+  CredentialType,
+  AuthMethodType,
   AuthStatus,
   ProviderConfig,
   StoredAuth,
+  StoredApiTokenAuth,
   StoredOAuthAuth,
 } from './types.js';
 import {
@@ -26,6 +33,7 @@ import { ProviderRegistry } from './providers/index.js';
 import { SapSsoMethod } from './methods/sap-sso.js';
 import { OAuthMethod } from './methods/oauth.js';
 import { ApiTokenMethod } from './methods/api-token.js';
+import type { AuthMethod } from './methods/base.js';
 import { extractErrorMessage } from 'mcp-utils';
 
 /**
@@ -55,35 +63,56 @@ export class AuthManager {
     return AuthManager.instance;
   }
 
+  // ============================================================================
+  // Public API
+  // ============================================================================
+
   /**
-   * Get credentials for a provider
-   * This is the main method MCPs use
+   * Get credentials for a provider.
+   * This is the main method MCPs use.
    *
-   * @param providerId - The provider ID (e.g., 'wiki', 'jira', 'teams')
-   * @returns Credentials object with type and value
-   * @throws AuthError if authentication fails
+   * Flow:
+   * 1. Load stored auth (once)
+   * 2. If stored: validate → return, or refresh → return
+   * 3. If no valid auth: check if default method would produce rejected type,
+   *    then authenticate fresh
+   *
+   * Method resolution uses stored.method (not config.method) — if a PAT was
+   * stored for an SSO provider, we use ApiTokenMethod, not SapSsoMethod.
    */
   async getCredentials(providerId: string): Promise<Credentials> {
-    const config = ProviderRegistry.get(providerId);
+    const config = this.requireConfig(providerId);
+    const stored = await this.storage.get<StoredAuth>(providerId);
 
-    if (!config) {
-      throw new AuthNotConfiguredError(
-        providerId,
-        `Unknown provider: ${providerId}. Available: ${ProviderRegistry.list().join(', ')}`,
-      );
+    // Try existing credentials (method from stored auth, not config)
+    if (stored) {
+      const method = this.methodFor(stored.method);
+
+      if (await method.validate(stored)) {
+        return this.checked(method.toCredentials(stored), config);
+      }
+
+      // Try refresh
+      const refreshed = await method.refresh(stored, config);
+      if (refreshed && (await method.validate(refreshed))) {
+        await this.storage.set(providerId, refreshed);
+        return this.checked(method.toCredentials(refreshed), config);
+      }
     }
 
-    // Get the appropriate auth method
-    const method = this.getMethodForConfig(config);
+    // Fresh auth — but first check if default method would produce rejected type
+    // (e.g., don't launch browser to get cookies for GitHub which only accepts PATs)
+    this.guardDefaultMethod(config);
 
+    const method = this.methodFor(config.method);
     try {
-      return await method.getCredentials(config);
+      const newAuth = await method.authenticate(config);
+      await this.storage.set(providerId, newAuth);
+      return this.checked(method.toCredentials(newAuth), config);
     } catch (error) {
-      // Re-throw auth errors as-is
       if (error instanceof AuthError) {
         throw error;
       }
-      // Wrap other errors
       throw new AuthError(
         `Failed to get credentials for ${providerId}: ${extractErrorMessage(error)}`,
         'AUTH_FAILED',
@@ -95,9 +124,6 @@ export class AuthManager {
   /**
    * Get credentials for a specific token audience (OAuth only)
    * Used when a provider has multiple token audiences (e.g., Teams vs Graph)
-   *
-   * @param providerId - The provider ID
-   * @param audience - The token audience to get
    */
   async getCredentialsForAudience(
     providerId: string,
@@ -146,8 +172,6 @@ export class AuthManager {
 
   /**
    * Get auth status for a provider without triggering authentication
-   *
-   * @param providerId - The provider ID
    */
   async getStatus(providerId: string): Promise<AuthStatus> {
     const config = ProviderRegistry.get(providerId);
@@ -176,21 +200,22 @@ export class AuthManager {
       };
     }
 
-    const method = this.getMethodForConfig(config);
-    const status = await method.getStatus(providerId);
+    const method = this.methodFor(stored.method);
+    const valid = await method.validate(stored);
+    const expiresAt = method.getExpiresAt(stored);
 
     let expiresInMinutes: number | null = null;
-    if (status.expiresAt) {
-      const remaining = status.expiresAt.getTime() - Date.now();
+    if (expiresAt) {
+      const remaining = expiresAt.getTime() - Date.now();
       expiresInMinutes = Math.max(0, Math.round(remaining / 60000));
     }
 
     return {
       providerId,
-      configured: status.configured,
-      valid: status.valid,
+      configured: true,
+      valid,
       method: stored.method,
-      expiresAt: status.expiresAt,
+      expiresAt,
       expiresInMinutes,
     };
   }
@@ -198,19 +223,19 @@ export class AuthManager {
   /**
    * Set an API token for a provider
    * Used when provider requires API token and user provides it
-   *
-   * @param providerId - The provider ID
-   * @param token - The API token
    */
   async setApiToken(providerId: string, token: string): Promise<void> {
-    await this.apiTokenMethod.setToken(providerId, token);
+    const auth: StoredApiTokenAuth = {
+      method: 'api-token',
+      token,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.storage.set(providerId, auth);
   }
 
   /**
    * Force re-authentication for a provider
    * Clears stored auth and triggers fresh authentication
-   *
-   * @param providerId - The provider ID
    */
   async forceReauth(providerId: string): Promise<Credentials> {
     await this.storage.delete(providerId);
@@ -219,8 +244,6 @@ export class AuthManager {
 
   /**
    * Clear auth for a specific provider
-   *
-   * @param providerId - The provider ID
    */
   async clearAuth(providerId: string): Promise<void> {
     await this.storage.delete(providerId);
@@ -249,31 +272,9 @@ export class AuthManager {
 
   /**
    * Register a custom provider
-   *
-   * @param config - The provider configuration
    */
   registerProvider(config: ProviderConfig): void {
     ProviderRegistry.register(config);
-  }
-
-  /**
-   * Get the appropriate auth method for a provider config
-   */
-  private getMethodForConfig(config: ProviderConfig) {
-    switch (config.method) {
-      case 'sap-sso':
-        return this.sapSsoMethod;
-      case 'oauth':
-        return this.oauthMethod;
-      case 'api-token':
-        return this.apiTokenMethod;
-      default:
-        throw new AuthError(
-          `Unknown auth method: ${config.method}`,
-          'UNKNOWN_METHOD',
-          config.id,
-        );
-    }
   }
 
   /**
@@ -281,6 +282,75 @@ export class AuthManager {
    */
   getStoragePath(): string {
     return this.storage.getAuthFilePath();
+  }
+
+  // ============================================================================
+  // Private helpers
+  // ============================================================================
+
+  /**
+   * Resolve method instance by auth type
+   */
+  private methodFor(type: AuthMethodType): AuthMethod {
+    switch (type) {
+      case 'sap-sso':
+        return this.sapSsoMethod;
+      case 'oauth':
+        return this.oauthMethod;
+      case 'api-token':
+        return this.apiTokenMethod;
+    }
+  }
+
+  /**
+   * Return credentials if type is accepted by the provider, throw if not.
+   * Single enforcement point for acceptedCredentialTypes.
+   */
+  private checked(creds: Credentials, config: ProviderConfig): Credentials {
+    if (
+      config.acceptedCredentialTypes &&
+      !config.acceptedCredentialTypes.includes(creds.type)
+    ) {
+      const instructions =
+        config.setupInstructions ||
+        `Provider ${config.id} requires credentials of type: ${config.acceptedCredentialTypes.join(', ')}`;
+      throw new ApiTokenRequiredError(config.id, instructions);
+    }
+    return creds;
+  }
+
+  /**
+   * Throw early if the config's default auth method would produce a credential
+   * type that's not accepted (e.g., don't launch a browser to get cookies
+   * for GitHub which only accepts PATs).
+   */
+  private guardDefaultMethod(config: ProviderConfig): void {
+    const typeMap: Record<AuthMethodType, CredentialType> = {
+      'sap-sso': 'cookie',
+      'oauth': 'bearer',
+      'api-token': 'api-token',
+    };
+    const credType = typeMap[config.method];
+    if (credType) {
+      this.checked(
+        { type: credType, value: '', expiresAt: null },
+        config,
+      );
+    }
+  }
+
+  /**
+   * Get provider config or throw
+   */
+  private requireConfig(providerId: string): ProviderConfig {
+    const config = ProviderRegistry.get(providerId);
+    if (!config) {
+      throw new AuthNotConfiguredError(
+        providerId,
+        `Unknown provider: ${providerId}. Available: ${ProviderRegistry.list().join(', ')}`,
+      );
+    }
+    return config;
   }
 }
 

@@ -61,9 +61,12 @@ npm run build
 Set the following environment variables for SAP GitHub Enterprise:
 
 ```bash
-export GITHUB_TOKEN="<YOUR_GITHUB_TOKEN>"
 export GITHUB_API_URL="https://github.tools.sap/api/v3"
 export GITHUB_DEFAULT_OWNER="i530424"
+# Optional: GITHUB_TOKEN is stored centrally via sap-auth after first use.
+# If set, the token is persisted to ~/.sap-mcp/auth.json and subsequent
+# runs don't need it in the environment.
+export GITHUB_TOKEN="<YOUR_GITHUB_TOKEN>"
 ```
 
 For other GitHub instances, adjust the API URL accordingly:

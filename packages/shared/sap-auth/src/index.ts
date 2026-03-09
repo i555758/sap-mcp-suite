@@ -58,6 +58,8 @@ export {
   JIRA_PROVIDER,
   TEAMS_PROVIDER,
   GRAPH_PROVIDER,
+  GITHUB_PROVIDER,
+  GITHUB_WDF_PROVIDER,
 } from './providers/index.js';
 
 // Auth methods (for advanced customization)
@@ -68,6 +70,10 @@ export { ApiTokenMethod } from './methods/api-token.js';
 
 // Browser authenticator (for advanced use)
 export { BrowserAuthenticator } from './browser/index.js';
+
+// Browser-based HTTP request (fallback for unknown providers)
+export { makeBrowserRequest } from './browser/index.js';
+export type { BrowserRequestOptions, BrowserRequestResponse } from './browser/index.js';
 
 // MCP auth helpers (for consistent auth error handling)
 export {

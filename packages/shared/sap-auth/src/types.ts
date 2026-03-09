@@ -52,6 +52,10 @@ export interface ProviderConfig {
   additionalAudiences?: string[];
   /** Instructions for API token setup (shown to user) */
   setupInstructions?: string;
+  /** Which credential types this provider's API accepts.
+   *  If set, getCredentials() rejects stored creds of non-accepted types.
+   *  If unset, all credential types are accepted. */
+  acceptedCredentialTypes?: CredentialType[];
 }
 
 // ============================================================================

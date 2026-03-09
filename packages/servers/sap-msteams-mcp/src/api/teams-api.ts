@@ -19,6 +19,8 @@ import type {
   TranscriptSegment,
   ConversationsApiResponse,
   MessagesApiResponse,
+  FindPrivateChatResult,
+  PrivateChatCandidate,
 } from "../types.js";
 
 const log = createLogger("teams-api");
@@ -62,6 +64,21 @@ function extractUserIdsFromConversationId(conversationId: string): string[] | nu
     return [match[1], match[2]];
   }
   return null;
+}
+
+/**
+ * Construct a private chat conversation ID from two user IDs
+ */
+function constructPrivateChatId(userId1: string, userId2: string): string {
+  return `19:${userId1}_${userId2}@unq.gbl.spaces`;
+}
+
+/**
+ * Check if a string is a valid GUID format
+ * Teams conversation IDs use GUIDs, not other ID formats
+ */
+function isValidGuid(id: string): boolean {
+  return /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
 }
 
 /**
@@ -296,71 +313,202 @@ export class TeamsApiClient {
   }
 
   /**
-   * Find 1:1 private conversation with a specific person
-   * This searches for direct chats (not group chats or meetings)
-   * Uses Graph API to resolve user IDs to names
-   *
-   * @param personName - Name or partial name of the person
-   * @returns The 1:1 conversation if found, null otherwise
+   * Try to access a thread directly by ID
+   * Returns true if the thread exists, false otherwise
    */
-  async findPrivateChat(personName: string): Promise<Conversation | null> {
-    const conversations = await this.getConversations({ limit: 100 });
-    const searchLower = personName.toLowerCase();
+  private async threadExists(conversationId: string): Promise<boolean> {
+    try {
+      const region = this.authManager.getRegion();
+      const token = await this.authManager.getToken();
+      const threadUrl = `https://teams.cloud.microsoft/api/chatsvc/${region}/v1/threads/${encodeURIComponent(conversationId)}?view=msnp24Equivalent`;
+
+      const response = await fetch(threadUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get all user IDs that we have existing private chats with
+   * This is done client-side by parsing conversation IDs
+   */
+  private async getExistingPrivateChatUserIds(): Promise<Set<string>> {
     const myUserId = await this.getMyUserId();
+    const conversations = await this.getConversations({ limit: 100 });
+    const userIds = new Set<string>();
 
-    // Only look at private chats (format: 19:{guid}_{guid}@unq.gbl.spaces)
-    const privateChats = conversations.filter((c) => {
-      const userIds = extractUserIdsFromConversationId(c.id);
-      return userIds !== null;
-    });
-
-    // Collect all other-user IDs to resolve
-    const userIdsToResolve = new Set<string>();
-    for (const chat of privateChats) {
-      const userIds = extractUserIdsFromConversationId(chat.id);
-      if (userIds) {
-        for (const id of userIds) {
+    for (const conv of conversations) {
+      const ids = extractUserIdsFromConversationId(conv.id);
+      if (ids) {
+        for (const id of ids) {
           if (id !== myUserId) {
-            userIdsToResolve.add(id);
+            userIds.add(id);
           }
         }
       }
     }
 
-    // Batch resolve user names via Graph API
-    const userMap = await this.graphClient.getUsersByIds([...userIdsToResolve]);
+    return userIds;
+  }
 
-    // Find matching private chat
-    for (const chat of privateChats) {
-      const userIds = extractUserIdsFromConversationId(chat.id);
-      if (!userIds) continue;
-
-      const otherUserId = userIds.find((id) => id !== myUserId);
-      if (!otherUserId) continue;
-
-      const user = userMap.get(otherUserId);
-      if (user) {
-        const nameMatch =
-          user.displayName?.toLowerCase().includes(searchLower) ||
-          user.mail?.toLowerCase().includes(searchLower) ||
-          user.givenName?.toLowerCase().includes(searchLower) ||
-          user.surname?.toLowerCase().includes(searchLower);
-
-        if (nameMatch) {
-          return {
-            ...chat,
-            topic: user.displayName || "Private Chat",
-            resolvedUser: {
-              id: otherUserId,
-              displayName: user.displayName,
-              email: user.mail,
-            },
-          };
-        }
-      }
+  /**
+   * Find 1:1 private conversation with a specific person (optimized)
+   *
+   * Algorithm:
+   * 1. Search for user via Graph API (fast)
+   * 2. If 1 result: try direct thread lookup
+   * 3. If multiple results: filter to those we've chatted with, ask user if still ambiguous
+   *
+   * @param personName - Name or partial name of the person
+   * @returns FindPrivateChatResult with status and conversation or candidates
+   */
+  async findPrivateChat(personName: string): Promise<FindPrivateChatResult> {
+    const myUserId = await this.getMyUserId();
+    if (!myUserId) {
+      return { status: "not_found", message: "Could not determine current user ID" };
     }
 
-    return null;
+    // Step 1: Search for user via Graph API
+    const rawResults = await this.graphClient.searchPeople(personName, 10);
+
+    // Filter out non-GUID IDs (external contacts) and the current user
+    const searchResults = rawResults.filter(
+      user => isValidGuid(user.id) && user.id !== myUserId
+    );
+
+    if (searchResults.length === 0) {
+      return { status: "not_found", message: `No user found matching "${personName}"` };
+    }
+
+    // Step 2: If exactly 1 result, try direct thread lookup
+    if (searchResults.length === 1) {
+      const user = searchResults[0];
+      const userId = user.id;
+
+      // Try both ID orderings
+      const convId1 = constructPrivateChatId(userId, myUserId);
+      const convId2 = constructPrivateChatId(myUserId, userId);
+
+      if (await this.threadExists(convId1)) {
+        return {
+          status: "found",
+          conversation: {
+            id: convId1,
+            topic: user.displayName,
+            type: "Chat",
+            lastActivity: "",
+            resolvedUser: {
+              id: userId,
+              displayName: user.displayName,
+              email: user.emailAddresses?.[0]?.address,
+            },
+          },
+        };
+      }
+
+      if (await this.threadExists(convId2)) {
+        return {
+          status: "found",
+          conversation: {
+            id: convId2,
+            topic: user.displayName,
+            type: "Chat",
+            lastActivity: "",
+            resolvedUser: {
+              id: userId,
+              displayName: user.displayName,
+              email: user.emailAddresses?.[0]?.address,
+            },
+          },
+        };
+      }
+
+      // User exists but no chat history
+      return {
+        status: "no_chat",
+        message: `Found user "${user.displayName}" but no existing private chat. You may need to start a new conversation.`,
+        candidates: [{
+          userId,
+          displayName: user.displayName,
+          email: user.emailAddresses?.[0]?.address,
+          hasExistingChat: false,
+        }],
+      };
+    }
+
+    // Step 3: Multiple results - filter to those we've chatted with
+    const existingChatUserIds = await this.getExistingPrivateChatUserIds();
+
+    const candidates: PrivateChatCandidate[] = [];
+    for (const user of searchResults) {
+      const hasExistingChat = existingChatUserIds.has(user.id);
+
+      // Determine conversation ID if chat exists
+      let conversationId: string | undefined;
+      if (hasExistingChat) {
+        const convId1 = constructPrivateChatId(user.id, myUserId);
+        const convId2 = constructPrivateChatId(myUserId, user.id);
+        // Check which one exists (one of them must since user is in existingChatUserIds)
+        if (await this.threadExists(convId1)) {
+          conversationId = convId1;
+        } else {
+          conversationId = convId2;
+        }
+      }
+
+      candidates.push({
+        userId: user.id,
+        displayName: user.displayName,
+        email: user.emailAddresses?.[0]?.address,
+        hasExistingChat,
+        conversationId,
+      });
+    }
+
+    // Filter to only those with existing chats
+    const withChats = candidates.filter(c => c.hasExistingChat);
+
+    if (withChats.length === 1) {
+      // Exactly one match with existing chat
+      const match = withChats[0];
+      return {
+        status: "found",
+        conversation: {
+          id: match.conversationId!,
+          topic: match.displayName,
+          type: "Chat",
+          lastActivity: "",
+          resolvedUser: {
+            id: match.userId,
+            displayName: match.displayName,
+            email: match.email,
+          },
+        },
+      };
+    }
+
+    if (withChats.length > 1) {
+      // Multiple matches with existing chats - ambiguous
+      return {
+        status: "ambiguous",
+        message: `Multiple people match "${personName}" and have existing chats. Please select one.`,
+        candidates: withChats,
+      };
+    }
+
+    // No existing chats with any matches
+    return {
+      status: "ambiguous",
+      message: `Multiple people match "${personName}" but none have existing chats. Please select one to start a conversation.`,
+      candidates,
+    };
   }
 
   /**

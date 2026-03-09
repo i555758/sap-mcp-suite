@@ -75,24 +75,53 @@ export async function handleMessages(
 export async function handleFindPrivateChat(
   apiClient: TeamsApiClient,
   args: {
-    personName: string;
+    query: string;
   },
 ) {
-  const { personName } = args;
+  const { query } = args;
 
-  const conversation = await apiClient.findPrivateChat(personName);
-  if (conversation) {
-    return jsonResponse({
-      found: true,
-      conversation,
-      hint: "Use the conversation.id with teams_web_send to send a message to this person.",
-    });
-  } else {
-    return jsonResponse({
-      found: false,
-      personName,
-      hint: "No 1:1 private chat found with this person. Try using teams_web_conversations with search parameter.",
-    });
+  const result = await apiClient.findPrivateChat(query);
+
+  switch (result.status) {
+    case "found":
+      return jsonResponse({
+        found: true,
+        conversation: result.conversation,
+        hint: "Use the conversation.id with teams_web_send to send a message to this person.",
+      });
+
+    case "not_found":
+      return jsonResponse({
+        found: false,
+        query,
+        message: result.message,
+        hint: "No user found matching this name.",
+      });
+
+    case "no_chat":
+      return jsonResponse({
+        found: false,
+        query,
+        message: result.message,
+        user: result.candidates?.[0],
+        hint: "User exists but no private chat history. You can start a new conversation with them.",
+      });
+
+    case "ambiguous":
+      return jsonResponse({
+        found: false,
+        query,
+        message: result.message,
+        candidates: result.candidates,
+        hint: "Multiple matches found. Please ask the user to select one and then call teams_web_send with the conversationId directly, or call this tool again with a more specific name.",
+      });
+
+    default:
+      return jsonResponse({
+        found: false,
+        query,
+        hint: "No 1:1 private chat found with this person.",
+      });
   }
 }
 
@@ -136,7 +165,7 @@ export function registerConversationHandlers(context: TeamsHandlerContext): void
         limit: z.number().optional().describe("Max conversations to return (default: 20)"),
         since: z.string().optional().describe("ISO date string - only conversations with activity after this time"),
         until: z.string().optional().describe("ISO date string - only conversations with activity before this time"),
-        search: z.string().optional().describe("Search query - finds conversations by topic, participant name, or message content. For private chats, resolves user names from IDs. Use 'Surname, Name' format or just surname for best results."),
+        search: z.string().optional().describe("Search query - finds conversations by topic, participant name, or message content."),
       },
     },
     wrapToolHandler(
@@ -174,11 +203,11 @@ export function registerConversationHandlers(context: TeamsHandlerContext): void
       title: "Find Private Chat",
       description: "Find the 1:1 private chat with a specific person. Returns only direct private chats, not group chats or meetings. Use this to get the conversation ID before sending a direct message.",
       inputSchema: {
-        personName: z.string().describe("Name or partial name of the person (required). Use 'Surname, Name' format or just surname for best results."),
+        query: z.string().describe("Name, partial name, or email of the person (required)."),
       },
     },
     wrapToolHandler(
-      (args: { personName: string }) =>
+      (args: { query: string }) =>
         handleFindPrivateChat(apiClient, args),
       errorOptions
     )

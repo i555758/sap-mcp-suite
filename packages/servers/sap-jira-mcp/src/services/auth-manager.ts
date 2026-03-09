@@ -8,6 +8,7 @@ import {
   AuthManager as SharedAuthManager,
   AuthError,
   ApiTokenRequiredError,
+  credentialsToHeaders,
   type Credentials,
 } from "sap-auth";
 import { logger } from "../utils/logger.js";
@@ -17,37 +18,26 @@ export { AuthError, ApiTokenRequiredError };
 export type { Credentials };
 
 /**
- * AuthManager for Jira - thin wrapper around shared auth package
+ * AuthManager for Jira - thin wrapper around shared auth package.
+ * Credentials are resolved lazily — if none exist, the shared
+ * package throws a structured error with setup instructions.
  */
 export class AuthManager {
   private sharedAuth: SharedAuthManager;
-  private apiToken: string | undefined;
+  private lastCredType: string = "cookie";
 
-  /**
-   * Constructor
-   * @param apiToken Optional API token (from JIRA_API_TOKEN env var)
-   */
-  constructor(apiToken?: string) {
+  constructor() {
     this.sharedAuth = SharedAuthManager.getInstance();
-    this.apiToken = apiToken;
   }
 
   /**
-   * Initialize the auth manager with API token if provided
-   * Call this after construction to ensure token is set
-   */
-  async initialize(): Promise<void> {
-    if (this.apiToken) {
-      await this.sharedAuth.setApiToken("jira", this.apiToken);
-      logger.info("[AuthManager] API token configured");
-    }
-  }
-
-  /**
-   * Get credentials from the shared auth manager
+   * Get credentials from the shared auth manager.
+   * Errors propagate with setup instructions from the provider registry.
    */
   async getCredentials(): Promise<Credentials> {
-    return this.sharedAuth.getCredentials("jira");
+    const creds = await this.sharedAuth.getCredentials("jira");
+    this.lastCredType = creds.type;
+    return creds;
   }
 
   /**
@@ -55,20 +45,15 @@ export class AuthManager {
    */
   async getAuthHeaders(): Promise<Record<string, string>> {
     const creds = await this.getCredentials();
-
-    if (creds.type === "cookie") {
-      return { Cookie: creds.value };
-    }
-    // api-token or bearer
-    return { Authorization: `Bearer ${creds.value}` };
+    return credentialsToHeaders(creds);
   }
 
   /**
-   * Get the authentication type
-   * @returns 'api_token' or 'cookies'
+   * Get the authentication type from the last resolved credentials.
+   * Defaults to "cookies" since that's the most common Jira auth method.
    */
   getAuthType(): "api_token" | "cookies" {
-    return this.apiToken ? "api_token" : "cookies";
+    return this.lastCredType === "api-token" ? "api_token" : "cookies";
   }
 
   /**

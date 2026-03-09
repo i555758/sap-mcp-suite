@@ -46,7 +46,6 @@ export class ApiTokenMethod extends AuthMethod<StoredApiTokenAuth> {
     _stored: StoredApiTokenAuth | null,
     _config: ProviderConfig,
   ): Promise<StoredApiTokenAuth | null> {
-    // API tokens can't be refreshed
     return null;
   }
 
@@ -64,21 +63,9 @@ export class ApiTokenMethod extends AuthMethod<StoredApiTokenAuth> {
   }
 
   /**
-   * Set an API token directly (called by MCP after user provides token)
-   */
-  async setToken(providerId: string, token: string): Promise<void> {
-    const auth: StoredApiTokenAuth = {
-      method: 'api-token',
-      token,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.storage.set(providerId, auth);
-  }
-
-  /**
    * API tokens don't expire
    */
-  protected getExpiresAt(_stored: StoredApiTokenAuth): Date | null {
+  getExpiresAt(_stored: StoredApiTokenAuth): Date | null {
     return null;
   }
 }

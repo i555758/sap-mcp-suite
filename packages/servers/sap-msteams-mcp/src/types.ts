@@ -215,6 +215,25 @@ export interface TranscriptParams {
   url: string;
 }
 
+// ============================================================================
+// Find Private Chat Types
+// ============================================================================
+
+export interface PrivateChatCandidate {
+  userId: string;
+  displayName: string;
+  email?: string;
+  hasExistingChat: boolean;
+  conversationId?: string;
+}
+
+export interface FindPrivateChatResult {
+  status: "found" | "not_found" | "ambiguous" | "no_chat";
+  conversation?: Conversation;
+  candidates?: PrivateChatCandidate[];
+  message?: string;
+}
+
 export interface SummarizeParams {
   conversationId: string;
   messageCount?: number;

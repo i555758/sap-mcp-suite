@@ -5,7 +5,7 @@
 
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { existsSync } from 'fs';
-import { killProcessByPid, killRemainingChromeProcesses } from './process-manager.js';
+import { killRemainingChromeProcesses } from './process-manager.js';
 
 /**
  * Browser mode type
@@ -139,44 +139,6 @@ function buildLaunchOptions(headless: boolean, inPrivate: boolean): any {
         : []),
     ],
   };
-}
-
-/**
- * Safe browser close method - prevents hanging Chrome instances
- */
-export async function safeBrowserClose(browser: Browser | null): Promise<void> {
-  if (!browser) return;
-
-  let browserProcess: any = null;
-
-  try {
-    console.log('Safely closing existing browser instance...');
-    browserProcess = browser.process();
-
-    // First try to close all pages
-    const pages = await browser.pages();
-    for (const page of pages) {
-      try {
-        await page.close();
-      } catch {
-        // Ignore
-      }
-    }
-
-    // Then close the browser
-    await browser.close();
-    console.log('Browser instance closed successfully');
-  } catch (error) {
-    console.warn('Warning: Error during safe browser close:', error);
-  }
-
-  // Always try to kill the process forcefully as a backup
-  if (browserProcess && !browserProcess.killed) {
-    const pid = browserProcess.pid;
-    console.log(`Force killing browser process (PID: ${pid}) to ensure cleanup...`);
-    await killProcessByPid(pid);
-    console.log('Browser process terminated');
-  }
 }
 
 /**

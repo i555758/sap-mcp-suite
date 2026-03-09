@@ -23,11 +23,10 @@ const PROVIDERS: Record<string, ProviderConfig> = {
     entryUrl: 'https://jira.tools.sap/',
     domain: 'jira.tools.sap',
     setupInstructions:
-      'To use API token authentication:\n' +
-      '1. Go to https://jira.tools.sap/secure/ViewProfile.jspa\n' +
-      '2. Click "Personal Access Tokens"\n' +
-      '3. Create a new token\n' +
-      '4. Provide the token when prompted',
+      'To set up authentication, use one of these approaches:\n' +
+      '1. For permanent access, provide a PAT: sap_authenticate({ entry_url: "https://jira.tools.sap/", token: "YOUR_PAT" })\n' +
+      '   Create one at: https://jira.tools.sap/secure/ViewProfile.jspa → Personal Access Tokens\n' +
+      '2. For temporary access (~24h): sap_authenticate({ entry_url: "https://jira.tools.sap/" })',
   },
 
   teams: {
@@ -51,6 +50,32 @@ const PROVIDERS: Record<string, ProviderConfig> = {
     entryUrl: 'https://teams.cloud.microsoft/v2/', // Auth via Teams
     domain: 'graph.microsoft.com',
     tokenAudience: 'https://graph.microsoft.com',
+  },
+
+  github: {
+    id: 'github',
+    name: 'SAP GitHub Enterprise',
+    method: 'sap-sso',
+    entryUrl: 'https://github.tools.sap/',
+    domain: 'github.tools.sap',
+    acceptedCredentialTypes: ['api-token', 'bearer'],
+    setupInstructions:
+      'GitHub API requires a Personal Access Token (PAT).\n' +
+      'To set up: sap_authenticate({ entry_url: "https://github.tools.sap/", token: "YOUR_PAT" })\n' +
+      'Create a PAT at: https://github.tools.sap/settings/tokens/new (select all scopes for full AI access)',
+  },
+
+  'github-wdf': {
+    id: 'github-wdf',
+    name: 'SAP GitHub Enterprise (WDF)',
+    method: 'sap-sso',
+    entryUrl: 'https://github.wdf.sap.corp/',
+    domain: 'github.wdf.sap.corp',
+    acceptedCredentialTypes: ['api-token', 'bearer'],
+    setupInstructions:
+      'GitHub API requires a Personal Access Token (PAT).\n' +
+      'To set up: sap_authenticate({ entry_url: "https://github.wdf.sap.corp/", token: "YOUR_PAT" })\n' +
+      'Create a PAT at: https://github.wdf.sap.corp/settings/tokens/new (select all scopes for full AI access)',
   },
 };
 
@@ -112,6 +137,29 @@ export class ProviderRegistry {
 
     return Array.from(all.values());
   }
+
+  /**
+   * Resolve provider ID from a URL by matching against registered provider domains.
+   * Returns null if no provider matches.
+   */
+  static resolveByUrl(url: string): string | null {
+    const lowerUrl = url.toLowerCase();
+
+    // Check custom providers first (they override built-in)
+    for (const [, config] of this.customProviders) {
+      if (lowerUrl.includes(config.domain)) {
+        return config.id;
+      }
+    }
+
+    for (const config of Object.values(PROVIDERS)) {
+      if (lowerUrl.includes(config.domain)) {
+        return config.id;
+      }
+    }
+
+    return null;
+  }
 }
 
 // Re-export individual provider IDs for convenience
@@ -119,3 +167,5 @@ export const WIKI_PROVIDER = 'wiki';
 export const JIRA_PROVIDER = 'jira';
 export const TEAMS_PROVIDER = 'teams';
 export const GRAPH_PROVIDER = 'graph';
+export const GITHUB_PROVIDER = 'github';
+export const GITHUB_WDF_PROVIDER = 'github-wdf';

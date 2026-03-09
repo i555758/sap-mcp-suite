@@ -7,37 +7,82 @@ import { textResponse, textError, extractErrorMessage, wrapToolHandler } from "m
 import { isAuthError } from "sap-auth";
 import { WikiHttpClient } from "../api/wiki-client.js";
 import type { WikiHandlerContext, AuthErrorHandler } from "./types.js";
+import { writeFileSync, readFileSync, existsSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+const WIKI_TMP_DIR = tmpdir();
+
+// Metadata comment prefix used in saved wiki files
+const META_PREFIX = "<!-- wiki_meta:";
+const META_SUFFIX = " -->";
+
+/**
+ * Build a temp file path for a wiki page: /tmp/wiki_{pageId}_v{version}.xml
+ */
+function buildWikiFilePath(pageId: string, version: number): string {
+  return join(WIKI_TMP_DIR, `wiki_${pageId}_v${version}.xml`);
+}
+
+/**
+ * Build a metadata comment line to embed in the saved file.
+ * Format: <!-- wiki_meta:pageId=123;version=5;title=My Page;space=BDC -->
+ */
+function buildMetaComment(pageId: string, version: number, title: string, spaceKey: string): string {
+  return `${META_PREFIX}pageId=${pageId};version=${version};title=${title};space=${spaceKey}${META_SUFFIX}`;
+}
+
+/**
+ * Parse metadata from a wiki file's first line.
+ * Returns null if the file doesn't have a valid meta comment.
+ */
+function parseMetaComment(fileContent: string): {
+  pageId: string;
+  version: number;
+  title: string;
+  spaceKey: string;
+  content: string;
+} | null {
+  const firstNewline = fileContent.indexOf("\n");
+  if (firstNewline === -1) return null;
+
+  const firstLine = fileContent.substring(0, firstNewline);
+  if (!firstLine.startsWith(META_PREFIX) || !firstLine.endsWith(META_SUFFIX)) return null;
+
+  const metaStr = firstLine.substring(META_PREFIX.length, firstLine.length - META_SUFFIX.length);
+  const pairs: Record<string, string> = {};
+  for (const pair of metaStr.split(";")) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx === -1) continue;
+    pairs[pair.substring(0, eqIdx)] = pair.substring(eqIdx + 1);
+  }
+
+  if (!pairs.pageId || !pairs.version || !pairs.title || !pairs.space) return null;
+
+  return {
+    pageId: pairs.pageId,
+    version: parseInt(pairs.version, 10),
+    title: pairs.title,
+    spaceKey: pairs.space,
+    content: fileContent.substring(firstNewline + 1),
+  };
+}
 
 // Schema for wiki_content tool
 export const WikiContentSchema = z.object({
   url: z.string().describe("The complete wiki URL to fetch content from"),
-  raw: z
-    .boolean()
-    .optional()
-    .default(false)
-    .describe("Return raw HTML content without cleaning (default: false)"),
   format: z
     .enum(["text", "storage"])
     .optional()
     .default("text")
-    .describe("Output format: 'text' (default) for readable content, 'storage' for Confluence XML format with version info (needed for editing)"),
+    .describe("Output format: 'text' (default) returns plain readable text, 'storage' saves Confluence XML to a temp file for editing"),
 });
 
 // Schema for wiki_update_page tool
 export const WikiUpdatePageSchema = z.object({
-  pageId: z
+  file_path: z
     .string()
-    .describe("The Confluence page ID to update (e.g., '5825274447')"),
-  content: z
-    .string()
-    .describe("The new page content in Confluence storage format (XML). Must be obtained by first reading the page with format='storage'"),
-  version: z
-    .number()
-    .describe("The current version number of the page (obtained from reading the page with format='storage'). This prevents overwriting concurrent edits."),
-  title: z
-    .string()
-    .optional()
-    .describe("Optional: New title for the page. If not provided, keeps the existing title."),
+    .describe("Path to the temp file saved by wiki_content (e.g., /tmp/wiki_123_v5.xml). All metadata (pageId, version, title) is read from the file."),
   comment: z
     .string()
     .optional()
@@ -78,9 +123,9 @@ export async function handleWikiContent(
   authErrorHandler?: AuthErrorHandler
 ) {
   try {
-    const { url, raw = false, format = "text" } = WikiContentSchema.parse(args);
+    const { url, format = "text" } = WikiContentSchema.parse(args);
 
-    console.error(`Fetching wiki content from: ${url} (raw: ${raw}, format: ${format})`);
+    console.error(`Fetching wiki content from: ${url} (format: ${format})`);
 
     // Validate URL is from the configured wiki domain
     const expectedDomain = client.getWikiDomain();
@@ -90,22 +135,15 @@ export async function handleWikiContent(
 
     const startTime = Date.now();
 
-    // Handle storage format - use REST API to get Confluence storage XML
+    // Handle storage format - save to temp file
     if (format === "storage") {
-      // Extract pageId from URL - supports multiple formats:
-      // 1. ?pageId=123456 (query parameter)
-      // 2. /pages/viewpage.action?pageId=123456
-      // 3. /spaces/SPACE/pages/123456/Title (pretty URL)
-      // 4. /pages/123456 (short format)
       let pageId: string | null = null;
 
-      // Try query parameter format first
       const queryParamMatch = url.match(/pageId=(\d+)/);
       if (queryParamMatch) {
         pageId = queryParamMatch[1];
       }
 
-      // Try pretty URL format: /spaces/SPACE/pages/PAGEID/Title or /pages/PAGEID
       if (!pageId) {
         const prettyUrlMatch = url.match(/\/pages\/(\d+)(?:\/|$)/);
         if (prettyUrlMatch) {
@@ -121,20 +159,23 @@ export async function handleWikiContent(
       const endTime = Date.now();
       console.error(`Storage format fetched in ${endTime - startTime}ms`);
 
-      // Return structured data for editing
-      const output = `Page ID: ${storageData.pageId}
+      // Save content to temp file with metadata header
+      const filePath = buildWikiFilePath(storageData.pageId, storageData.version);
+      const metaLine = buildMetaComment(storageData.pageId, storageData.version, storageData.title, storageData.spaceKey);
+      writeFileSync(filePath, metaLine + "\n" + storageData.content, "utf-8");
+      console.error(`Storage content saved to: ${filePath}`);
+
+      return textResponse(`Page ID: ${storageData.pageId}
 Title: ${storageData.title}
 Space: ${storageData.spaceKey}
 Version: ${storageData.version}
+File: ${filePath}
 
---- STORAGE FORMAT CONTENT (use this for wiki_update_page) ---
-${storageData.content}`;
-
-      return textResponse(output);
+Content saved to file. Use the Read/Edit tools to modify the file, then call wiki_update_page with file_path="${filePath}" to upload.`);
     }
 
-    // Default: text format
-    const pageContent = await client.fetchWikiContent(url, raw);
+    // Default: text format (cleaned, no HTML)
+    const pageContent = await client.fetchWikiContent(url, false);
     const endTime = Date.now();
 
     console.error(`Content fetched in ${endTime - startTime}ms`);
@@ -161,9 +202,28 @@ export async function handleWikiUpdatePage(
   authErrorHandler?: AuthErrorHandler
 ) {
   try {
-    const { pageId, content, version, title, comment } = WikiUpdatePageSchema.parse(args);
+    const { file_path, comment } = WikiUpdatePageSchema.parse(args);
 
-    console.error(`Updating wiki page: ${pageId} (version: ${version})`);
+    if (!existsSync(file_path)) {
+      return textError(`FILE_NOT_FOUND: ${file_path} does not exist. Re-fetch the page with wiki_content format='storage'.`);
+    }
+
+    const fileContent = readFileSync(file_path, "utf-8");
+    const meta = parseMetaComment(fileContent);
+    if (!meta) {
+      return textError("INVALID_FILE: File is missing the metadata header. Re-fetch the page with wiki_content format='storage'.");
+    }
+
+    const { pageId, version, title, content } = meta;
+
+    // Version check: fetch current version from Confluence
+    console.error(`Checking version for page ${pageId} (local: v${version})...`);
+    const currentPage = await client.getPageStorageFormat(pageId);
+    if (currentPage.version !== version) {
+      return textError(`VERSION_MISMATCH: Local file is v${version} but wiki is v${currentPage.version}. The page has been modified. Re-fetch with wiki_content format='storage' to get the latest version.`);
+    }
+
+    console.error(`Version check passed (v${version}). Updating page ${pageId}...`);
 
     const startTime = Date.now();
     const result = await client.updatePageContent(
@@ -191,9 +251,8 @@ URL: ${result.url}`);
     }
 
     if (error instanceof Error) {
-      // Handle specific update errors
       if (error.message.includes("VERSION_CONFLICT")) {
-        return textError("VERSION_CONFLICT: The page has been modified by someone else. Please re-read the page with format='storage' to get the latest version and try again.");
+        return textError("VERSION_CONFLICT: The page has been modified by someone else. Re-fetch with wiki_content format='storage' to get the latest version.");
       }
 
       if (error.message.includes("ACCESS_FORBIDDEN")) {
@@ -244,7 +303,6 @@ URL: ${result.url}`);
     }
 
     if (error instanceof Error) {
-      // Handle specific create errors
       if (error.message.includes("DUPLICATE_TITLE")) {
         return textError(error.message);
       }
@@ -297,7 +355,6 @@ Page ID: ${result.pageId}`);
     }
 
     if (error instanceof Error) {
-      // Handle specific delete errors
       if (error.message.includes("PAGE_NOT_FOUND")) {
         return textError(error.message);
       }
@@ -328,24 +385,19 @@ export function registerContentHandlers(context: WikiHandlerContext): void {
     {
       title: "Wiki Content",
       description:
-        "Fetch complete content from a specific wiki page URL. Use URLs from search results to get detailed page content.",
+        "Fetch content from a wiki page URL. format='text' returns plain readable text inline. format='storage' saves Confluence XML to a temp file for editing — use the Edit tool to modify it, then wiki_update_page to upload.",
       inputSchema: {
         url: z
           .string()
           .describe(
             "The complete wiki URL to fetch content from (e.g., https://wiki.one.int.sap/wiki/pages/viewpage.action?pageId=123456)"
           ),
-        raw: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe("Return raw HTML content without cleaning (default: false)"),
         format: z
           .enum(["text", "storage"])
           .optional()
           .default("text")
           .describe(
-            "Output format: 'text' (default) for readable content, 'storage' for Confluence XML format with version info (needed for editing)"
+            "Output format: 'text' (default) returns plain readable text, 'storage' saves Confluence XML to a temp file for editing"
           ),
       },
     },
@@ -364,26 +416,12 @@ export function registerContentHandlers(context: WikiHandlerContext): void {
     {
       title: "Wiki Update Page",
       description:
-        "Update a wiki page's content. IMPORTANT: You must first read the page using wiki_content with format='storage' to get the current content and version number. This tool will fail if you haven't read the page first.",
+        "Update a wiki page from a temp file saved by wiki_content (format='storage'). Reads pageId, version, and title from the file's metadata header. Checks the version against Confluence before uploading to prevent stale updates.",
       inputSchema: {
-        pageId: z
-          .string()
-          .describe("The Confluence page ID to update (e.g., '5825274447')"),
-        content: z
+        file_path: z
           .string()
           .describe(
-            "The new page content in Confluence storage format (XML). Must be obtained by first reading the page with format='storage'"
-          ),
-        version: z
-          .number()
-          .describe(
-            "The current version number of the page (obtained from reading the page with format='storage'). This prevents overwriting concurrent edits."
-          ),
-        title: z
-          .string()
-          .optional()
-          .describe(
-            "Optional: New title for the page. If not provided, keeps the existing title."
+            "Path to the temp file saved by wiki_content (e.g., /tmp/wiki_123_v5.xml). All metadata is embedded in the file."
           ),
         comment: z
           .string()

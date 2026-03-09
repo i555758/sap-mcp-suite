@@ -1,1 +1,1 @@
-export { ProviderRegistry, WIKI_PROVIDER, JIRA_PROVIDER, TEAMS_PROVIDER, GRAPH_PROVIDER } from './registry.js';
+export { ProviderRegistry, WIKI_PROVIDER, JIRA_PROVIDER, TEAMS_PROVIDER, GRAPH_PROVIDER, GITHUB_PROVIDER, GITHUB_WDF_PROVIDER } from './registry.js';

@@ -159,6 +159,7 @@ export class BaseJiraApi {
         }
       } catch (error) {
         logger.warn("[Interceptor] Failed to get auth headers:", error);
+        throw error;
       }
 
       // Add CSRF protection headers for write operations

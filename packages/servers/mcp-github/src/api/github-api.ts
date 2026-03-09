@@ -11,19 +11,28 @@ import {
 
 /**
  * GitHub API service class
+ *
+ * Uses a request interceptor to fetch fresh credentials on every call,
+ * so new PATs are picked up immediately without restarting the server.
  */
 export class GitHubApiService {
   private client: AxiosInstance;
 
-  constructor(apiUrl: string, token: string) {
+  constructor(apiUrl: string, getToken: () => Promise<string>) {
     this.client = axios.create({
       baseURL: apiUrl,
       headers: {
-        'Authorization': `Bearer ${token}`,
         'Accept': 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         'User-Agent': 'GitHub-MCP-Server/1.0.0'
       }
+    });
+
+    // Resolve token on every request — picks up new PATs without restart
+    this.client.interceptors.request.use(async (config) => {
+      const token = await getToken();
+      config.headers['Authorization'] = `Bearer ${token}`;
+      return config;
     });
   }
 

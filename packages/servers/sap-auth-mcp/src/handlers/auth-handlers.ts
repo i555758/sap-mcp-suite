@@ -8,35 +8,12 @@ import {
   AuthError,
   AuthBrowserError,
   ApiTokenRequiredError,
+  ProviderRegistry,
+  credentialsToHeaders,
+  makeBrowserRequest,
 } from "sap-auth";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpResponse } from "mcp-utils";
-
-/**
- * Map URL to provider ID
- */
-export function urlToProviderId(url: string): string | null {
-  const lowerUrl = url.toLowerCase();
-
-  if (lowerUrl.includes("wiki.one.int.sap") || lowerUrl.includes("wiki")) {
-    return "wiki";
-  }
-  if (lowerUrl.includes("jira.tools.sap") || lowerUrl.includes("jira")) {
-    return "jira";
-  }
-  if (
-    lowerUrl.includes("teams.microsoft.com") ||
-    lowerUrl.includes("teams.cloud.microsoft") ||
-    lowerUrl.includes("teams")
-  ) {
-    return "teams";
-  }
-  if (lowerUrl.includes("graph.microsoft.com") || lowerUrl.includes("graph")) {
-    return "graph";
-  }
-
-  return null;
-}
 
 /**
  * Handle sap_authenticate tool
@@ -46,18 +23,35 @@ export async function handleAuthenticate(
   args: Record<string, unknown> | undefined,
 ): Promise<McpResponse> {
   const entryUrl = args?.entry_url as string;
+  const token = args?.token as string | undefined;
 
   if (!entryUrl) {
     throw new McpError(ErrorCode.InvalidRequest, "entry_url is required");
   }
 
   // Map URL to provider ID
-  const providerId = urlToProviderId(entryUrl);
+  const providerId = ProviderRegistry.resolveByUrl(entryUrl);
   if (!providerId) {
     throw new McpError(
       ErrorCode.InvalidRequest,
-      `Unknown SAP system URL: ${entryUrl}. Supported: wiki.one.int.sap, jira.tools.sap, teams.microsoft.com`,
+      `Unknown SAP system URL: ${entryUrl}. Supported: wiki.one.int.sap, jira.tools.sap, teams.microsoft.com, github.tools.sap, github.wdf.sap.corp`,
     );
+  }
+
+  // If token is provided directly, store it as an API token (no browser needed)
+  if (token) {
+    await auth.setApiToken(providerId, token);
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Successfully stored API token for ${providerId} (${entryUrl})\n` +
+            `Credential type: api-token\n` +
+            `Storage: ${auth.getStoragePath()}`,
+        },
+      ],
+    };
   }
 
   try {
@@ -92,7 +86,11 @@ export async function handleAuthenticate(
         content: [
           {
             type: "text",
-            text: `API token required for ${providerId}:\n${error.instructions}`,
+            text:
+              `API token required for ${providerId}.\n\n` +
+              `${error.instructions}\n\n` +
+              `Once you have the token, store it by calling:\n` +
+              `sap_authenticate({ entry_url: "${entryUrl}", token: "YOUR_TOKEN" })`,
           },
         ],
       };
@@ -118,11 +116,15 @@ export async function handleMakeRequest(
   }
 
   // Determine provider from URL
-  const providerId = urlToProviderId(url as string);
+  const providerId = ProviderRegistry.resolveByUrl(url as string);
+
+  // No known provider — fall back to browser-based request
   if (!providerId) {
-    throw new McpError(
-      ErrorCode.InvalidRequest,
-      `Cannot determine provider for URL: ${url}`,
+    return await handleBrowserRequest(
+      url as string,
+      method as string,
+      headers as Record<string, string>,
+      body,
     );
   }
 
@@ -131,18 +133,11 @@ export async function handleMakeRequest(
     const credentials = await auth.getCredentials(providerId);
 
     // Build request headers
+    const authHeaders = credentialsToHeaders(credentials);
     const requestHeaders: Record<string, string> = {
       ...(headers as Record<string, string>),
+      ...authHeaders,
     };
-
-    if (credentials.type === "cookie") {
-      requestHeaders["Cookie"] = credentials.value;
-    } else if (
-      credentials.type === "bearer" ||
-      credentials.type === "api-token"
-    ) {
-      requestHeaders["Authorization"] = `Bearer ${credentials.value}`;
-    }
 
     // Make the request
     const fetchOptions: RequestInit = {
@@ -190,6 +185,56 @@ export async function handleMakeRequest(
       );
     }
     throw error;
+  }
+}
+
+/**
+ * Make an HTTP request via headless browser.
+ * Used when the URL doesn't match any known provider — the browser's
+ * system credentials (Kerberos/keychain) handle authentication automatically.
+ */
+async function handleBrowserRequest(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: unknown,
+): Promise<McpResponse> {
+  try {
+    const response = await makeBrowserRequest(url, {
+      method,
+      headers,
+      body,
+    });
+
+    let responseData: unknown;
+    try {
+      responseData = JSON.parse(response.body);
+    } catch {
+      responseData = response.body;
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+              data: responseData,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  } catch (error) {
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Browser request failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -256,6 +301,9 @@ export function registerAuthHandlers(server: McpServer, auth: AuthManager): void
       inputSchema: {
         entry_url: z.string().describe(
           "SAP system entry URL (e.g., https://jira.tools.sap/, https://wiki.one.int.sap/)",
+        ),
+        token: z.string().optional().describe(
+          "Optional: API token/PAT to store directly without launching a browser. Use for systems requiring Personal Access Tokens (e.g., GitHub, Jira).",
         ),
       },
     },

@@ -3,21 +3,23 @@
  * Main entry point for the GitHub MCP server
  */
 import { GitHubServer } from './server.js';
+import { GitHubAuthManager } from './services/auth-manager.js';
 
-// Get environment variables
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN as string;
 const GITHUB_API_URL = process.env.GITHUB_API_URL || 'https://api.github.com';
 
-// Validate environment variables
-if (!GITHUB_TOKEN) {
-  throw new Error(
-    "GITHUB_TOKEN environment variable is required"
-  );
+async function main() {
+  const authManager = new GitHubAuthManager(GITHUB_API_URL);
+
+  console.error(`Starting GitHub MCP server with:
+- GITHUB_API_URL: ${GITHUB_API_URL}
+- Auth: lazy (resolved on first tool call)
+- Provider: ${authManager.getProviderId()}`);
+
+  const server = new GitHubServer(GITHUB_API_URL, authManager);
+  await server.run();
 }
 
-console.error(`Starting GitHub MCP server with:
-- GITHUB_API_URL: ${GITHUB_API_URL}`);
-
-// Create and run the server
-const server = new GitHubServer(GITHUB_API_URL, GITHUB_TOKEN);
-server.run().catch(console.error);
+main().catch((error) => {
+  console.error('Fatal error:', error.message || error);
+  process.exit(1);
+});
