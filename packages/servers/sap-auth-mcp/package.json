@@ -42,12 +42,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.tools.sap/sfsfmcp/sap-auth-mcp.git"
+    "url": "git+https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite.git",
+    "directory": "packages/servers/sap-auth-mcp"
   },
   "bugs": {
-    "url": "https://github.tools.sap/sfsfmcp/sap-auth-mcp/issues"
+    "url": "https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite/issues"
   },
-  "homepage": "https://github.tools.sap/sfsfmcp/sap-auth-mcp#readme",
+  "homepage": "https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite#readme",
   "author": "",
   "license": "MIT",
   "volta": {

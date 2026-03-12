@@ -36,12 +36,9 @@ Examples:
 Environment Variables:
   AUTH_COOKIE_DIR      Directory to store authentication cookies
 
-Remote usage with npx:
-  npx -y git+https://github.tools.sap/sfsfmcp/sap-wiki-mcp.git
-
 For more information:
-  GitHub: https://github.tools.sap/sfsfmcp/sap-wiki-mcp
-  Issues: https://github.tools.sap/sfsfmcp/sap-wiki-mcp/issues
+  GitHub: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite
+  Issues: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite/issues
 `);
 }
 

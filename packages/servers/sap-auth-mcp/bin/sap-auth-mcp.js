@@ -37,12 +37,9 @@ Environment Variables:
   SAP_AUTH_ACCOUNT     Your SAP email account (optional)
   BROWSER_PATH         Custom browser executable path (optional)
 
-Remote usage with npx:
-  npx -y git+https://github.tools.sap/sfsfmcp/sap-auth-mcp.git
-
 For more information:
-  GitHub: https://github.tools.sap/sfsfmcp/sap-auth-mcp
-  Issues: https://github.tools.sap/sfsfmcp/sap-auth-mcp/issues
+  GitHub: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite
+  Issues: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite/issues
 `);
 }
 
