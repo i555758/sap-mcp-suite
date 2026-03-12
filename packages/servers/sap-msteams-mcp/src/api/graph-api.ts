@@ -224,8 +224,11 @@ export class GraphApiClient {
         `/me/directReports?$top=${limit}`,
       );
       return (data.value ?? []).map((u: any) => this.mapGraphUser(u));
-    } catch {
-      return [];
+    } catch (e: any) {
+      // Let auth errors propagate — only return empty for "no reports" (404)
+      if (e instanceof AuthError) throw e;
+      if (e.message?.includes("404")) return [];
+      throw e;
     }
   }
 
@@ -246,6 +249,7 @@ export class GraphApiClient {
       const data = await this.graphRequest<any>(`/users/${userId}`);
       return this.mapGraphUser(data);
     } catch (e: any) {
+      if (e instanceof AuthError) throw e;
       log.debug(`Failed to get user ${userId}: ${e.message}`);
       return null;
     }

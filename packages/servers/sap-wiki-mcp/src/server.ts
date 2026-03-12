@@ -44,12 +44,14 @@ export class WikiServer {
   /**
    * Create auth error response wrapper
    */
-  private createAuthErrorResponse(): McpResponse {
-    // For PAT authentication, return clear error message
+  private createAuthErrorResponse(error?: unknown): McpResponse {
     if (this.apiToken) {
       return textError("AUTHENTICATION_ERROR: Invalid or expired API token. Please check your WIKI_API_TOKEN environment variable.");
     }
-    return formatAuthError(new Error("AUTHENTICATION_REQUIRED"), "wiki");
+    return formatAuthError(
+      error instanceof Error ? error : new Error("AUTHENTICATION_REQUIRED"),
+      "wiki"
+    );
   }
 
   /**

@@ -99,7 +99,7 @@ export async function handleGeneralSearch(
     console.error("Search error:", error);
 
     if (isAuthError(error) && authErrorHandler) {
-      return await authErrorHandler();
+      return await authErrorHandler(error);
     }
 
     if (error instanceof Error) {
@@ -228,7 +228,7 @@ export async function handleCqlSearch(
     console.error("CQL search error:", error);
 
     if (isAuthError(error) && authErrorHandler) {
-      return await authErrorHandler();
+      return await authErrorHandler(error);
     }
 
     if (error instanceof Error) {
@@ -255,7 +255,7 @@ export function registerSearchHandlers(context: WikiHandlerContext): void {
 
   const errorOptions = {
     isAuthError,
-    onAuthError: (_error: unknown) => authErrorHandler(),
+    onAuthError: (error: unknown) => authErrorHandler(error),
   };
 
   // general_search tool

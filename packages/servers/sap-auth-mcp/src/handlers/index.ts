@@ -9,7 +9,7 @@ export {
   handleAuthenticate,
   handleMakeRequest,
   handleGetCookieInfo,
-  handleClearCookies,
+  handleClearAuths,
   registerAuthHandlers,
 } from "./auth-handlers.js";
 

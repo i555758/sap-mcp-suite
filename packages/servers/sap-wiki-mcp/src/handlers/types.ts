@@ -8,7 +8,7 @@ import { WikiHttpClient } from "../api/wiki-client.js";
 /**
  * Auth error handler type - returns McpResponse for type compatibility with wrapToolHandler
  */
-export type AuthErrorHandler = () => McpResponse;
+export type AuthErrorHandler = (error?: unknown) => McpResponse;
 
 /**
  * Context object passed to handler registration functions

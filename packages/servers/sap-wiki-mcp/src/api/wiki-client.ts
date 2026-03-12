@@ -3,7 +3,6 @@ import {
   AuthManager,
   AuthError,
   AuthExpiredError,
-  AuthNotConfiguredError,
   buildUserAgent,
 } from "sap-auth";
 import { decodeHtmlEntities, extractErrorMessage } from "mcp-utils";
@@ -137,52 +136,35 @@ export class WikiHttpClient {
       console.log("PAT authentication enabled, skipping cookie loading");
       return { cookieLoaded: false };
     }
-    return await this.loadAuthCredentials();
-  }
-
-  async reloadCookies(): Promise<{ cookieLoaded: boolean }> {
-    if (this.usePATAuth) {
+    try {
+      return await this.loadAuthCredentials();
+    } catch {
+      console.log("No valid auth at startup — will authenticate on first request");
       return { cookieLoaded: false };
     }
-    return await this.loadAuthCredentials();
   }
 
   /**
-   * Load credentials from AuthManager (shared auth package)
+   * Load credentials from AuthManager (shared auth package).
+   * No try/catch — getCredentials() handles the full auth lifecycle
+   * (validate → refresh → fresh browser auth) transparently.
+   * If it fails, the error propagates so callers get a real reason.
    */
   private async loadAuthCredentials(): Promise<{ cookieLoaded: boolean }> {
-    try {
-      const creds = await this.authManager.getCredentials("wiki");
+    const creds = await this.authManager.getCredentials("wiki");
 
-      if (creds.type === "cookie") {
-        this.httpClient.defaults.headers.common["Cookie"] = creds.value;
-        console.log("Loaded cookies from shared auth storage");
-        return { cookieLoaded: true };
-      } else if (creds.type === "bearer") {
-        this.httpClient.defaults.headers.common["Authorization"] =
-          `Bearer ${creds.value}`;
-        console.log("Loaded bearer token from shared auth storage");
-        return { cookieLoaded: true };
-      }
-
-      return { cookieLoaded: false };
-    } catch (error) {
-      if (
-        error instanceof AuthExpiredError ||
-        error instanceof AuthNotConfiguredError
-      ) {
-        console.log(
-          `Authentication required: ${error instanceof AuthExpiredError ? "expired" : "not configured"}`,
-        );
-        return { cookieLoaded: false };
-      }
-      if (error instanceof AuthError) {
-        console.error("Auth error:", error.message);
-        return { cookieLoaded: false };
-      }
-      console.error("Cookie initialization failed:", error);
-      return { cookieLoaded: false };
+    if (creds.type === "cookie") {
+      this.httpClient.defaults.headers.common["Cookie"] = creds.value;
+      console.log("Loaded cookies from shared auth storage");
+      return { cookieLoaded: true };
+    } else if (creds.type === "bearer") {
+      this.httpClient.defaults.headers.common["Authorization"] =
+        `Bearer ${creds.value}`;
+      console.log("Loaded bearer token from shared auth storage");
+      return { cookieLoaded: true };
     }
+
+    return { cookieLoaded: false };
   }
 
   /**
@@ -205,7 +187,8 @@ export class WikiHttpClient {
   }
 
   /**
-   * Retry a request once after reloading credentials on auth failure
+   * Retry a request once after re-authenticating on auth failure.
+   * Uses getCredentials() directly — it handles validate → refresh → fresh auth.
    */
   private async retryOnAuthFailure<T>(
     requestFn: () => Promise<T>,
@@ -220,19 +203,18 @@ export class WikiHttpClient {
         }
 
         console.error(
-          `[${context}] Auth error detected, attempting to reload credentials`,
+          `[${context}] Auth error detected, re-authenticating...`,
         );
-        const reloadResult = await this.reloadCookies();
+        const creds = await this.authManager.getCredentials("wiki");
 
-        if (reloadResult.cookieLoaded) {
-          console.log(`Retrying ${context} with reloaded cookies...`);
-          try {
-            return await requestFn();
-          } catch (retryError) {
-            throw new AuthExpiredError("wiki");
-          }
+        if (creds.type === "cookie") {
+          this.httpClient.defaults.headers.common["Cookie"] = creds.value;
+        } else if (creds.type === "bearer") {
+          this.httpClient.defaults.headers.common["Authorization"] =
+            `Bearer ${creds.value}`;
         }
-        throw new AuthExpiredError("wiki");
+
+        return await requestFn();
       }
       throw error;
     }

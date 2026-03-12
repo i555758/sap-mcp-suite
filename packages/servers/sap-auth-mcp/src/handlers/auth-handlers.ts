@@ -270,18 +270,62 @@ export async function handleGetCookieInfo(
 }
 
 /**
- * Handle sap_clear_cookies tool
+ * Handle sap_clear_auths tool
  */
-export async function handleClearCookies(
+export async function handleClearAuths(
   auth: AuthManager,
+  args: Record<string, unknown> | undefined,
 ): Promise<McpResponse> {
-  await auth.clearAll();
+  const provider = (args?.provider as string) || "all";
+  const includePats = (args?.include_pats as boolean) || false;
+
+  const statuses = await auth.listProviders();
+  const cleared: string[] = [];
+  const skipped: string[] = [];
+
+  const toClear = provider === "all"
+    ? statuses
+    : statuses.filter((s) => s.providerId === provider);
+
+  if (provider !== "all" && toClear.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Provider "${provider}" not found. Available: ${statuses.map((s) => s.providerId).join(", ")}`,
+        },
+      ],
+    };
+  }
+
+  for (const status of toClear) {
+    if (!status.method) continue; // no stored auth
+
+    if (status.method === "api-token" && !includePats) {
+      skipped.push(`${status.providerId} (PAT protected — use include_pats to clear)`);
+      continue;
+    }
+
+    await auth.clearAuth(status.providerId);
+    cleared.push(`${status.providerId} (${status.method})`);
+  }
+
+  const lines: string[] = [];
+  if (cleared.length > 0) {
+    lines.push(`Cleared: ${cleared.join(", ")}`);
+  }
+  if (skipped.length > 0) {
+    lines.push(`Skipped: ${skipped.join(", ")}`);
+  }
+  if (cleared.length === 0 && skipped.length === 0) {
+    lines.push("Nothing to clear — no stored credentials found.");
+  }
 
   return {
     content: [
       {
         type: "text",
-        text: `Cleared all stored authentication credentials from: ${auth.getStoragePath()}`,
+        text: lines.join("\n"),
       },
     ],
   };
@@ -354,16 +398,23 @@ export function registerAuthHandlers(server: McpServer, auth: AuthManager): void
     },
   );
 
-  // sap_clear_cookies tool
+  // sap_clear_auths tool
   server.registerTool(
-    "sap_clear_cookies",
+    "sap_clear_auths",
     {
-      title: "SAP Clear Cookies",
+      title: "SAP Clear Auth",
       description: "Clear stored authentication credentials",
-      inputSchema: {},
+      inputSchema: {
+        provider: z.string().optional().describe(
+          'Provider to clear (e.g., "wiki", "jira", "teams", "github-wdf", "github-tools"). Defaults to "all".',
+        ),
+        include_pats: z.boolean().optional().describe(
+          "Also clear PATs (Personal Access Tokens). PATs are protected by default since they require manual regeneration.",
+        ),
+      },
     },
-    async () => {
-      return await handleClearCookies(auth);
+    async (args) => {
+      return await handleClearAuths(auth, args);
     },
   );
 }

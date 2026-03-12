@@ -185,7 +185,7 @@ Content saved to file. Use the Read/Edit tools to modify the file, then call wik
     console.error("Wiki content fetch error:", error);
 
     if (isAuthError(error) && authErrorHandler) {
-      return await authErrorHandler();
+      return await authErrorHandler(error);
     }
 
     return textError(`CONTENT_FETCH_ERROR: ${extractErrorMessage(error)}`);
@@ -247,7 +247,7 @@ URL: ${result.url}`);
     console.error("Wiki update error:", error);
 
     if (isAuthError(error) && authErrorHandler) {
-      return await authErrorHandler();
+      return await authErrorHandler(error);
     }
 
     if (error instanceof Error) {
@@ -299,7 +299,7 @@ URL: ${result.url}`);
     console.error("Wiki create page error:", error);
 
     if (isAuthError(error) && authErrorHandler) {
-      return await authErrorHandler();
+      return await authErrorHandler(error);
     }
 
     if (error instanceof Error) {
@@ -351,7 +351,7 @@ Page ID: ${result.pageId}`);
     console.error("Wiki delete page error:", error);
 
     if (isAuthError(error) && authErrorHandler) {
-      return await authErrorHandler();
+      return await authErrorHandler(error);
     }
 
     if (error instanceof Error) {
@@ -376,7 +376,7 @@ export function registerContentHandlers(context: WikiHandlerContext): void {
 
   const errorOptions = {
     isAuthError,
-    onAuthError: (_error: unknown) => authErrorHandler(),
+    onAuthError: (error: unknown) => authErrorHandler(error),
   };
 
   // wiki_content tool

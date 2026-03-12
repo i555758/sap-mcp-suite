@@ -118,7 +118,8 @@ export class TeamsApiClient {
       const me = await this.graphClient.getMe();
       this.myUserId = me.id;
       return this.myUserId;
-    } catch {
+    } catch (error) {
+      if (error instanceof AuthError) throw error;
       return null;
     }
   }
@@ -317,11 +318,11 @@ export class TeamsApiClient {
    * Returns true if the thread exists, false otherwise
    */
   private async threadExists(conversationId: string): Promise<boolean> {
-    try {
-      const region = this.authManager.getRegion();
-      const token = await this.authManager.getToken();
-      const threadUrl = `https://teams.cloud.microsoft/api/chatsvc/${region}/v1/threads/${encodeURIComponent(conversationId)}?view=msnp24Equivalent`;
+    const region = this.authManager.getRegion();
+    const token = await this.authManager.getToken(); // let auth errors propagate
+    const threadUrl = `https://teams.cloud.microsoft/api/chatsvc/${region}/v1/threads/${encodeURIComponent(conversationId)}?view=msnp24Equivalent`;
 
+    try {
       const response = await fetch(threadUrl, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -331,7 +332,7 @@ export class TeamsApiClient {
 
       return response.ok;
     } catch {
-      return false;
+      return false; // network errors only — auth is already resolved above
     }
   }
 
@@ -556,8 +557,10 @@ export class TeamsApiClient {
           }
         }
       }
-    } catch {
-      // Ignore errors when fetching messages for display names
+    } catch (error) {
+      // Let auth errors propagate — only ignore non-auth errors (e.g. parsing)
+      if (error instanceof AuthError) throw error;
+      // Ignore non-auth errors when fetching messages for display names
     }
 
     // Process thread members
@@ -815,9 +818,9 @@ export class TeamsApiClient {
    * Fetch and parse meeting transcript
    */
   async getTranscript(url: string): Promise<TranscriptResult> {
-    try {
-      const token = await this.authManager.getToken();
+    const token = await this.authManager.getToken(); // let auth errors propagate
 
+    try {
       // Determine URL type and adjust if needed
       let transcriptUrl = url;
       const isAmsUrl = url.includes("asyncgw.teams.microsoft.com");
