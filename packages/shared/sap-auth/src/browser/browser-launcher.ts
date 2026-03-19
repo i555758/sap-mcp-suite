@@ -104,13 +104,14 @@ export function resolveBrowserPath(): string | undefined {
 /**
  * Build Puppeteer launch options
  */
-function buildLaunchOptions(headless: boolean, inPrivate: boolean): any {
+function buildLaunchOptions(headless: boolean, inPrivate: boolean, userDataDir?: string): any {
   const platformFlags = getPlatformFlags();
 
   return {
     headless: headless ? 'new' : false,
     devtools: false,
     executablePath: resolveBrowserPath(),
+    ...(userDataDir ? { userDataDir } : {}),
     args: [
       ...getCommonChromeArgs(),
       ...platformFlags,
@@ -148,6 +149,7 @@ export async function launchBrowser(
   headless: boolean,
   inPrivate: boolean,
   forceVisible: boolean,
+  userDataDir?: string,
 ): Promise<BrowserLaunchResult> {
   // Check for force visible mode - skip headless entirely
   if (headless && forceVisible) {
@@ -160,7 +162,7 @@ export async function launchBrowser(
   // Pre-launch cleanup: kill any lingering Puppeteer Chrome instances
   await killRemainingChromeProcesses();
 
-  const launchOptions = buildLaunchOptions(headless, inPrivate);
+  const launchOptions = buildLaunchOptions(headless, inPrivate, userDataDir);
 
   console.log(`Launching ${desiredMode} browser...`);
   const browser = await puppeteer.launch(launchOptions);

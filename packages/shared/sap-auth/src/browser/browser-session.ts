@@ -21,6 +21,7 @@ export interface BrowserSessionConfig {
   visibleMode: boolean;
   forceVisible: boolean;
   forceManualFallback: boolean;
+  userDataDir?: string;
 }
 
 /**
@@ -129,7 +130,7 @@ export async function launchBrowserSession(
     state = await safeBrowserClose(state);
   }
 
-  const result = await doLaunchBrowser(headless, config.inPrivate, config.forceVisible);
+  const result = await doLaunchBrowser(headless, config.inPrivate, config.forceVisible, config.userDataDir);
 
   // Configure page defaults
   await configurePageDefaults(result.page, userAgent, config.inPrivate);

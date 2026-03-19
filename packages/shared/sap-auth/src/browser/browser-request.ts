@@ -12,6 +12,8 @@
  */
 
 import type { Page, HTTPResponse } from 'puppeteer';
+import { join } from 'path';
+import { homedir } from 'os';
 import { runHybridBrowserFlow } from './hybrid-flow.js';
 
 export interface BrowserRequestOptions {
@@ -46,6 +48,7 @@ export async function makeBrowserRequest(
   return runHybridBrowserFlow<BrowserRequestResponse>({
     entryUrl: origin,
     domain,
+    userDataDir: join(homedir(), '.sap-auth', 'browser-profile'),
     onAuthenticated: (page) =>
       method === 'GET'
         ? executeViaNavigation(page, url)

@@ -28,6 +28,7 @@ import {
   showAuthAlert,
 } from './auth-flows.js';
 import { attemptHeadlessAuth } from './sso-automation.js';
+import { saveDebugSnapshot } from './debug-snapshot.js';
 
 // ============================================================================
 // Constants
@@ -63,6 +64,9 @@ export interface HybridFlowOptions<T> {
   /** Pass `true` when authenticating against Teams (affects `waitForAuthenticationCompletion`). */
   isTeams?: boolean;
 
+  /** Persistent Chrome profile directory. When set, cookies survive across browser launches. */
+  userDataDir?: string;
+
   /**
    * Called once the browser is on an authenticated page.
    * The browser is closed **after** this callback returns.
@@ -82,7 +86,7 @@ export interface HybridFlowOptions<T> {
  */
 export async function runHybridBrowserFlow<T>(options: HybridFlowOptions<T>): Promise<T> {
   const { entryUrl, domain, isTeams = false, onAuthenticated } = options;
-  const config = buildSessionConfig();
+  const config = { ...buildSessionConfig(), ...(options.userDataDir ? { userDataDir: options.userDataDir } : {}) };
   let state: BrowserSessionState = createSessionState();
 
   const isAuth = options.isAuthenticated ?? ((url: string) => url.includes(domain) && !isLoginUrl(url));
@@ -147,6 +151,7 @@ export async function runHybridBrowserFlow<T>(options: HybridFlowOptions<T>): Pr
 
       if (ssoResult.needsUserInteraction) {
         console.error('User interaction required, switching to visible browser...');
+        await saveDebugSnapshot(page, 'hybrid-switching-to-visible');
         state = await switchToVisible(state, config, entryUrl, domain, isTeams, isAuth);
         page = requirePage(state, domain);
         const result = await runCallback(page, onAuthenticated);
@@ -224,7 +229,7 @@ async function navigateQuietly(page: Page, url: string): Promise<boolean> {
 
 /**
  * Switch from headless to visible mode:
- * save cookies → relaunch visible → restore cookies → navigate → alert → wait.
+ * relaunch visible → navigate to entryUrl → SSO automation → wait for user.
  */
 async function switchToVisible(
   state: BrowserSessionState,
@@ -234,27 +239,18 @@ async function switchToVisible(
   isTeams: boolean,
   isAuth: (url: string) => boolean,
 ): Promise<BrowserSessionState> {
-  const savedUrl = state.page?.url() || '';
-  const savedCookies = state.page ? await state.page.cookies() : [];
-
   state = await launchSession(state, false, config);
   const page = requirePage(state, domain);
 
-  if (savedCookies.length > 0) {
-    await page.setCookie(...savedCookies);
-    console.error(`Restored ${savedCookies.length} cookies to visible browser`);
-  }
-
-  const targetUrl = savedUrl && !savedUrl.startsWith('about:') ? savedUrl : entryUrl;
-  await navigateWithTimeout(page, targetUrl, FALLBACK_NAV_TIMEOUT_MS);
+  await navigateWithTimeout(page, entryUrl, FALLBACK_NAV_TIMEOUT_MS);
   await delay(NAV_SETTLE_MS);
 
-  // Already authenticated after restoring cookies?
+  // Already authenticated?
   if (isAuth(page.url())) {
     return state;
   }
 
-  // Try SSO automation in visible mode (it still clicks elements).
+  // Try SSO automation in visible mode.
   const ssoResult = await attemptHeadlessAuth(page, domain, config.userEmail, config.forceManualFallback);
   if (ssoResult.success) {
     return state;
@@ -331,6 +327,18 @@ function registerCleanupHandlers(state: BrowserSessionState): void {
       console.error('Process exit: Force closing browser...');
       state.browser.close().catch(() => {});
     }
+  });
+
+  // Prevent zombie Chrome processes on unexpected crashes
+  process.on('uncaughtException', async (err) => {
+    console.error('Uncaught exception: Closing browser...', err);
+    await safeBrowserClose(state);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', async (reason) => {
+    console.error('Unhandled rejection: Closing browser...', reason);
+    await safeBrowserClose(state);
+    process.exit(1);
   });
 
   cleanupHandlersRegistered = true;
