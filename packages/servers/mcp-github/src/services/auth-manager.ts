@@ -26,7 +26,7 @@ export class GitHubAuthManager {
 
   constructor(apiUrl: string) {
     this.sharedAuth = SharedAuthManager.getInstance();
-    this.providerId = ProviderRegistry.resolveByUrl(apiUrl) || "github";
+    this.providerId = ProviderRegistry.resolveByUrl(apiUrl) || "github-tools";
   }
 
   /**

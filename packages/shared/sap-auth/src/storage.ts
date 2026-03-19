@@ -10,7 +10,7 @@ import type { AuthStorage, StoredAuth } from './types.js';
 
 const AUTH_DIR = join(homedir(), '.sap-mcp');
 const AUTH_FILE = join(AUTH_DIR, 'auth.json');
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
 
 /**
  * Storage singleton for auth data
@@ -67,7 +67,11 @@ export class Storage {
 
       // Migrate if needed
       if (!storage.version || storage.version < CURRENT_VERSION) {
-        // For now, just set version - future migrations go here
+        // v1 → v2: Rename 'github' provider to 'github-tools'
+        if (storage.providers?.['github'] && !storage.providers?.['github-tools']) {
+          storage.providers['github-tools'] = storage.providers['github'];
+          delete storage.providers['github'];
+        }
         storage.version = CURRENT_VERSION;
       }
 

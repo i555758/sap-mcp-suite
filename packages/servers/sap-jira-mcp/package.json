@@ -25,6 +25,7 @@
     "mcp-logger": "*",
     "@modelcontextprotocol/sdk": "^1.27.0",
     "axios": "^1.12.2",
+    "form-data": "^4.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

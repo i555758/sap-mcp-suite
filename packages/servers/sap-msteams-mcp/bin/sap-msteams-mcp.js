@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createRequire } from "module";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { dirname, join } from "path";
 import { readFileSync, existsSync } from "fs";
 import { spawn } from "child_process";
@@ -108,7 +108,9 @@ async function main() {
   // Import and run the main server
   try {
     console.error("🚀 Starting SAP MS Teams MCP Server...");
-    await import(serverPath);
+    // On Windows, ESM dynamic import() requires file:// URLs for absolute paths
+    const serverPathUrl = pathToFileURL(serverPath).href;
+    await import(serverPathUrl);
   } catch (error) {
     console.error("❌ Error starting SAP MS Teams MCP Server:");
     console.error(error.message);

@@ -52,8 +52,8 @@ const PROVIDERS: Record<string, ProviderConfig> = {
     tokenAudience: 'https://graph.microsoft.com',
   },
 
-  github: {
-    id: 'github',
+  'github-tools': {
+    id: 'github-tools',
     name: 'SAP GitHub Enterprise',
     method: 'sap-sso',
     entryUrl: 'https://github.tools.sap/',
@@ -167,5 +167,5 @@ export const WIKI_PROVIDER = 'wiki';
 export const JIRA_PROVIDER = 'jira';
 export const TEAMS_PROVIDER = 'teams';
 export const GRAPH_PROVIDER = 'graph';
-export const GITHUB_PROVIDER = 'github';
+export const GITHUB_PROVIDER = 'github-tools';
 export const GITHUB_WDF_PROVIDER = 'github-wdf';

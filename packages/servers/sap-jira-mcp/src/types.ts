@@ -196,3 +196,34 @@ export interface UpdateTransitionRequest {
   transition_id: string;
   comment?: string;
 }
+
+// ============================================================================
+// Attachment Request Types
+// ============================================================================
+
+/**
+ * Download attachment request interface
+ */
+export interface DownloadAttachmentRequest {
+  issue_key: string;
+  attachment_id?: string;
+  filename?: string;
+  save_path?: string;
+}
+
+/**
+ * Upload attachment request interface
+ */
+export interface UploadAttachmentRequest {
+  issue_key: string;
+  file_path?: string;
+  file_content?: string;
+  file_name?: string;
+}
+
+/**
+ * Delete attachment request interface
+ */
+export interface DeleteAttachmentRequest {
+  attachment_id: string;
+}

@@ -12,6 +12,8 @@ export { registerFieldHandlers } from "./field-handlers.js";
 export { registerSprintHandlers } from "./sprint-handlers.js";
 export { registerTransitionHandlers } from "./transition-handlers.js";
 export { registerCommentHandlers } from "./comment-handlers.js";
+export { registerAttachmentHandlers } from "./attachment-handlers.js";
+export { registerBoardHandlers } from "./board-handlers.js";
 export { registerJqlHandlers } from "./jql-handlers.js";
 
 /**
@@ -24,6 +26,8 @@ import { registerFieldHandlers } from "./field-handlers.js";
 import { registerSprintHandlers } from "./sprint-handlers.js";
 import { registerTransitionHandlers } from "./transition-handlers.js";
 import { registerCommentHandlers } from "./comment-handlers.js";
+import { registerAttachmentHandlers } from "./attachment-handlers.js";
+import { registerBoardHandlers } from "./board-handlers.js";
 import { registerJqlHandlers } from "./jql-handlers.js";
 
 export function registerAllHandlers(context: HandlerContext): void {
@@ -33,5 +37,7 @@ export function registerAllHandlers(context: HandlerContext): void {
   registerSprintHandlers(context);
   registerTransitionHandlers(context);
   registerCommentHandlers(context);
+  registerAttachmentHandlers(context);
+  registerBoardHandlers(context);
   registerJqlHandlers(context);
 }

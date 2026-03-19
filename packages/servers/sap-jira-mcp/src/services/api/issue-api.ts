@@ -217,6 +217,28 @@ export class IssueApi extends BaseJiraApi {
         }
       }
 
+      // Intercept parent field from dynamicFields and format for Jira API
+      if (dynamicFields.parent) {
+        const parentValue = dynamicFields.parent;
+        if (typeof parentValue === "object" && parentValue !== null && "key" in parentValue) {
+          // Already in correct format: { key: "PROJ-123" }
+          fields.parent = parentValue;
+        } else if (typeof parentValue === "string") {
+          if (/^[A-Z]+-\d+$/i.test(parentValue)) {
+            // Looks like a full issue key: "PROJ-123"
+            fields.parent = { key: parentValue };
+          } else if (/^\d+$/.test(parentValue)) {
+            // Bare number: "123" → prefix with project key
+            fields.parent = { key: `${this.projectKey}-${parentValue}` };
+          } else {
+            // Fallback: treat as issue key
+            fields.parent = { key: parentValue };
+          }
+        }
+        logger.info(`Processed parent field:`, fields.parent);
+        delete dynamicFields.parent;
+      }
+
       // Process all template fields first
       for (const [key, value] of Object.entries(template)) {
         // Skip common fields that we've already handled

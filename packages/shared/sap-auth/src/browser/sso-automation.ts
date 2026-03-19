@@ -6,6 +6,7 @@
 import { Page } from 'puppeteer';
 import { extractErrorMessage, delay } from 'mcp-utils';
 import { isLoginUrl, checkForAuthenticatorNumber, handleAutomaticPrompts } from './auth-flows.js';
+import { saveDebugSnapshot } from './debug-snapshot.js';
 
 // ============================================================================
 // Constants
@@ -14,11 +15,15 @@ const ELEMENT_SEARCH_TIMEOUT_MS = 10000;
 const EMAIL_INPUT_TIMEOUT_MS = 15000;
 const SUBMIT_CLICK_TIMEOUT_MS = 10000;
 const POST_SUBMIT_DELAY_MS = 3000;
-const POST_AUTH_DELAY_MS = 3000;
 const REDIRECT_CONFIRMATION_DELAY_MS = 3000;
-const ACCOUNT_SELECTION_TIMEOUT_MS = 5000;
-const ACCOUNT_CLICK_DELAY_MS = 5000;
+const ACCOUNT_RENDER_POLL_TIMEOUT_MS = 15000;
+const ACCOUNT_RENDER_POLL_INTERVAL_MS = 1000;
 const PAGE_CONTENT_TIMEOUT_MS = 5000;
+const REDIRECT_POLL_INTERVAL_MS = 2000;
+const REDIRECT_POLL_MAX_MS = 15000;
+const AUTHENTICATOR_POLL_INTERVAL_MS = 3000;
+const AUTHENTICATOR_POLL_MAX_MS = 60000;
+const AUTHENTICATOR_PROGRESS_LOG_INTERVAL_MS = 15000;
 
 /**
  * Authentication attempt result
@@ -128,21 +133,31 @@ export async function attemptHeadlessAuth(
     }
 
     // Look for account selection with timeout protection
-    await tryAccountSelection(page, userEmail);
+    const accountClicked = await tryAccountSelection(page, userEmail);
 
     // Check for MFA/authenticator number
     const authenticatorNumber = await checkForAuthenticatorNumber(page);
     if (authenticatorNumber) {
-      console.error('Microsoft Authenticator Number Matching Required');
-      console.error(`Enter this number in your Authenticator app: ${authenticatorNumber}`);
-      return { success: false, needsUserInteraction: true };
+      console.error(`\n========================================`);
+      console.error(`  MS Authenticator: approve number ${authenticatorNumber} on your device`);
+      console.error(`========================================\n`);
+
+      const approvalResult = await waitForAuthenticatorApproval(page, domain);
+      if (approvalResult.success) {
+        // Approval detected — handle any post-auth prompts and continue
+        await handleAutomaticPrompts(page);
+        return { success: true, needsUserInteraction: false };
+      }
+      if (approvalResult.needsUserInteraction) {
+        return { success: false, needsUserInteraction: true };
+      }
     }
 
-    // Handle automatic prompts
+    // Handle automatic prompts ("Stay signed in?", etc.)
     await handleAutomaticPrompts(page);
 
-    // Check if we reached target with timeout protection
-    await delay(POST_AUTH_DELAY_MS);
+    // Poll for redirect instead of flat sleep (Improvement 4)
+    await waitForRedirectFromSso(page);
 
     let newUrl: string;
     try {
@@ -164,6 +179,25 @@ export async function attemptHeadlessAuth(
         console.error('SSO completed successfully');
         return { success: true, needsUserInteraction: false };
       }
+
+      // Double-redirect detected: we reached target but got bounced back to SSO.
+      // Try clicking the account again on the current page before giving up.
+      console.error('Double-redirect detected — attempting re-click on second SSO page...');
+      const secondAttempt = await tryAccountSelection(page, userEmail);
+      if (secondAttempt) {
+        // Re-check URL after second attempt
+        const urlAfterRetry = page.url();
+        if (urlAfterRetry.includes(domain) && !isLoginUrl(urlAfterRetry)) {
+          await delay(REDIRECT_CONFIRMATION_DELAY_MS);
+          const confirmedRetryUrl = page.url();
+          if (confirmedRetryUrl.includes(domain) && !isLoginUrl(confirmedRetryUrl)) {
+            console.error('SSO completed successfully after double-redirect re-click');
+            return { success: true, needsUserInteraction: false };
+          }
+        }
+      }
+      console.error('Double-redirect re-click did not resolve — needs user interaction');
+      return { success: false, needsUserInteraction: true };
     }
 
     // Still on login page - check for MFA or other requirements
@@ -171,9 +205,11 @@ export async function attemptHeadlessAuth(
 
     if (needsInteraction) {
       console.error('Additional authentication steps required');
+      await saveDebugSnapshot(page, 'sso-needs-interaction');
       return { success: false, needsUserInteraction: true };
     }
 
+    await saveDebugSnapshot(page, 'sso-auth-incomplete');
     return { success: false, needsUserInteraction: true };
   } catch (error) {
     const errorMessage = extractErrorMessage(error);
@@ -201,41 +237,234 @@ export async function attemptHeadlessAuth(
       console.error('Error may be related to certificate selection or SSL handshake');
     }
 
+    await saveDebugSnapshot(page, 'sso-auth-error');
     return { success: false, needsUserInteraction: true };
   }
 }
 
 /**
- * Try to select an account from the account picker
+ * Try to select an account from the account picker.
+ *
+ * Microsoft's SSO page uses Knockout.js which may still be rendering account
+ * tiles after `networkidle2` fires.  We poll for up to 15 seconds for either
+ * an account tile or an email input field to appear.
+ *
+ * Returns true if an account was clicked successfully, false otherwise.
  */
-async function tryAccountSelection(page: Page, userEmail: string | undefined): Promise<void> {
-  const accountSelectors = [
-    '.table-row',
-    '[data-test-id*="@"]',
-    'div[title*="@"]',
-    'button[data-test-id*="@"]',
-  ];
+async function tryAccountSelection(page: Page, userEmail: string | undefined): Promise<boolean> {
+  console.error('Waiting for account tiles or email input to render...');
 
-  for (const selector of accountSelectors) {
-    try {
-      const elements = await Promise.race([
-        page.$$(selector),
-        new Promise<any[]>((resolve) => setTimeout(() => resolve([]), ACCOUNT_SELECTION_TIMEOUT_MS)),
-      ]);
-      for (const element of elements) {
-        const text = await element.evaluate((el: Element) => el.textContent || '');
-        const targetEmail = userEmail || '@sap.com';
-        if (text.includes(targetEmail) || text.includes('@')) {
-          console.error(`Clicking account: ${text.substring(0, 40)}...`);
-          await element.click();
-          await delay(ACCOUNT_CLICK_DELAY_MS);
-          break;
+  let accountElement: any = null;
+  let usedSelector = '';
+
+  const renderPollStart = Date.now();
+
+  while (Date.now() - renderPollStart < ACCOUNT_RENDER_POLL_TIMEOUT_MS) {
+    // Check for email input field (means we should stop looking for tiles)
+    const emailInput = await page.$('input[type="email"]');
+    if (emailInput) {
+      console.error(`SSO page render wait: ${Math.round((Date.now() - renderPollStart) / 1000)}s — email input found`);
+      return false;
+    }
+
+    // Check for account tiles — specific email first, then general
+    if (userEmail) {
+      const specificSelectors = [
+        `div[data-test-id*="${userEmail}"]`,
+        `div[title*="${userEmail}"]`,
+        `button[data-test-id*="${userEmail}"]`,
+      ];
+      for (const selector of specificSelectors) {
+        try {
+          const elements = await page.$$(selector);
+          for (const element of elements) {
+            const text = await element.evaluate((el: Element) => el.textContent || '');
+            if (text.includes(userEmail)) {
+              accountElement = element;
+              usedSelector = selector;
+              break;
+            }
+          }
+          if (accountElement) break;
+        } catch {
+          // Continue
         }
       }
-    } catch {
-      // Continue
+    }
+
+    if (!accountElement) {
+      const generalSelectors = [
+        '.table-row',
+        '[data-test-id*="@"]',
+        'div[title*="@"]',
+        'button[data-test-id*="@"]',
+        '.ms-List-cell',
+        '.ms-Persona-primaryText',
+      ];
+      for (const selector of generalSelectors) {
+        try {
+          const elements = await page.$$(selector);
+          for (const element of elements) {
+            const text = await element.evaluate((el: Element) => el.textContent || '');
+            if (text.includes('@') && (text.includes('sap.com') || text.includes('.com'))) {
+              accountElement = element;
+              usedSelector = selector;
+              break;
+            }
+          }
+          if (accountElement) break;
+        } catch {
+          // Continue
+        }
+      }
+    }
+
+    if (accountElement) break;
+    await delay(ACCOUNT_RENDER_POLL_INTERVAL_MS);
+  }
+
+  console.error(`SSO page render wait: ${Math.round((Date.now() - renderPollStart) / 1000)}s`);
+
+  if (!accountElement) {
+    console.error('No account tile found for auto-selection');
+    await saveDebugSnapshot(page, 'sso-no-account-tile');
+    return false;
+  }
+
+  // Click the account tile
+  console.error(`Clicking account (selector: ${usedSelector})...`);
+  try {
+    await page.evaluate((el: Element) => el.scrollIntoView(), accountElement);
+    await delay(1000);
+    await accountElement.click();
+    console.error('Account clicked successfully');
+  } catch {
+    console.error('Failed to click account tile');
+    return false;
+  }
+
+  // Poll for redirect instead of flat sleep
+  await waitForRedirectFromSso(page);
+  return true;
+}
+
+/**
+ * Poll every 2 seconds for up to 15 seconds waiting for the URL to leave
+ * the SSO domains (microsoftonline.com and accounts.sap.com).
+ */
+async function waitForRedirectFromSso(page: Page): Promise<void> {
+  const pollStart = Date.now();
+  while (Date.now() - pollStart < REDIRECT_POLL_MAX_MS) {
+    await delay(REDIRECT_POLL_INTERVAL_MS);
+    const url = page.url();
+    if (!url.includes('microsoftonline.com') && !url.includes('accounts.sap.com')) {
+      console.error(`Redirect completed in ${Math.round((Date.now() - pollStart) / 1000)}s`);
+      return;
     }
   }
+  console.error(`Redirect poll timed out after ${Math.round(REDIRECT_POLL_MAX_MS / 1000)}s`);
+}
+
+/**
+ * Poll for up to 60 seconds waiting for the user to approve the
+ * Microsoft Authenticator number-matching prompt.
+ *
+ * Checks three conditions on each poll:
+ *  1. URL changed away from SSO (redirect happened -> approval successful)
+ *  2. The `#idRemoteNGC_DisplaySign` element disappeared (approval completed)
+ *  3. Page shows an error message (user denied or server timeout)
+ *
+ * Returns success:true if approval was detected, or
+ * needsUserInteraction:true if the 60s window expires.
+ */
+async function waitForAuthenticatorApproval(
+  page: Page,
+  domain: string,
+): Promise<AuthAttemptResult> {
+  const startUrl = page.url();
+  const pollStart = Date.now();
+  let lastProgressLog = 0;
+
+  while (Date.now() - pollStart < AUTHENTICATOR_POLL_MAX_MS) {
+    await delay(AUTHENTICATOR_POLL_INTERVAL_MS);
+    const elapsed = Date.now() - pollStart;
+
+    // Log progress every 15 seconds
+    if (elapsed - lastProgressLog >= AUTHENTICATOR_PROGRESS_LOG_INTERVAL_MS) {
+      lastProgressLog = elapsed;
+      console.error(
+        `Still waiting for Authenticator approval... ${Math.round(elapsed / 1000)}s/${Math.round(AUTHENTICATOR_POLL_MAX_MS / 1000)}s`,
+      );
+    }
+
+    // 1. Check if the URL changed (redirect = approval successful)
+    let currentUrl: string;
+    try {
+      currentUrl = page.url();
+    } catch {
+      // Page became inaccessible — likely navigating after approval
+      console.error('Authenticator: page navigating — assuming approval succeeded');
+      return { success: true, needsUserInteraction: false };
+    }
+
+    if (currentUrl !== startUrl) {
+      const leftSso =
+        !currentUrl.includes('microsoftonline.com') && !currentUrl.includes('accounts.sap.com');
+      if (leftSso) {
+        console.error(
+          `Authenticator approved — redirected away from SSO in ${Math.round(elapsed / 1000)}s`,
+        );
+        return { success: true, needsUserInteraction: false };
+      }
+      // URL changed but still on SSO — could be an intermediate redirect, keep polling.
+    }
+
+    // 2. Check if the number-matching element disappeared
+    try {
+      const numberElement = await page.$('#idRemoteNGC_DisplaySign');
+      if (!numberElement) {
+        console.error(
+          `Authenticator approved — number prompt disappeared after ${Math.round(elapsed / 1000)}s`,
+        );
+        // Brief pause for the page to settle after approval
+        await delay(2000);
+        return { success: true, needsUserInteraction: false };
+      }
+    } catch {
+      // Element query failed — page may be navigating
+      console.error('Authenticator: element query failed — assuming approval succeeded');
+      return { success: true, needsUserInteraction: false };
+    }
+
+    // 3. Check for error state (user denied or server timeout)
+    try {
+      const errorVisible = await page.evaluate(() => {
+        const errorEl =
+          document.querySelector('#idDiv_SAOTCAS_ErrorMsg') ||
+          document.querySelector('.alert-error') ||
+          document.querySelector('[data-testid="error"]');
+        if (errorEl) {
+          const style = window.getComputedStyle(errorEl);
+          if (style.display !== 'none' && style.visibility !== 'hidden') {
+            return errorEl.textContent?.trim() || 'Unknown error';
+          }
+        }
+        return null;
+      });
+
+      if (errorVisible) {
+        console.error(`Authenticator error detected: ${errorVisible}`);
+        return { success: false, needsUserInteraction: true };
+      }
+    } catch {
+      // Ignore evaluation errors — page may be transitioning
+    }
+  }
+
+  console.error(
+    `Authenticator approval timed out after ${Math.round(AUTHENTICATOR_POLL_MAX_MS / 1000)}s — falling back to visible browser`,
+  );
+  return { success: false, needsUserInteraction: true };
 }
 
 /**
@@ -252,17 +481,23 @@ async function checkNeedsUserInteraction(page: Page): Promise<boolean> {
     pageContent = '';
   }
 
-  // Check for indicators that need user interaction
+  // Check for real MFA / certificate prompts.
+  // Use specific patterns — overly broad matches like "code" or "verify"
+  // trigger false positives because those words appear in normal SSO pages
+  // (e.g. JavaScript code, HTML class names, cookie notices).
   return (
-    pageContent.includes('code') ||
-    pageContent.includes('verify') ||
-    pageContent.includes('certificate') ||
-    pageContent.includes('Authenticator') ||
-    pageContent.includes('password') ||
-    pageContent.includes('smartcard') ||
-    pageContent.includes('smart card') ||
-    pageContent.includes('select a certificate') ||
+    pageContent.includes('Enter code') ||
+    pageContent.includes('enter the code') ||
+    pageContent.includes('Approve sign in') ||
+    pageContent.includes('approve sign-in') ||
+    pageContent.includes('Verify your identity') ||
+    pageContent.includes('verify your identity') ||
     pageContent.includes('Choose a certificate') ||
-    pageContent.length < 500 // Very short content often indicates a dialog/prompt
+    pageContent.includes('Pick a certificate') ||
+    pageContent.includes('Use your Authenticator') ||
+    pageContent.includes('Microsoft Authenticator') ||
+    pageContent.includes('Enter your password') ||
+    pageContent.includes('enter your password') ||
+    (pageContent.length < 300 && !pageContent.includes('Signing in'))
   );
 }

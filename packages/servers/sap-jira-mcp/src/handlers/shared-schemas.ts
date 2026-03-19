@@ -86,7 +86,7 @@ export const jiraCustomFields = {
     .optional()
     .describe("Field for versions (used in Activity template)"),
   parent: z
-    .string()
+    .union([z.string(), z.object({ key: z.string() })])
     .optional()
     .describe("Field for parent (used in Sub-Task template)"),
   sprint: z
