@@ -29,6 +29,8 @@ const log = createLogger("teams-api");
 // Constants
 // ============================================================================
 
+export type MessageFormat = "html" | "markdown";
+
 const MAX_RETRY_ATTEMPTS = 2;
 const MESSAGE_PREVIEW_LENGTH = 100;
 const RECORDING_PREVIEW_LENGTH = 200;
@@ -642,37 +644,31 @@ export class TeamsApiClient {
   }
 
   /**
+   * Resolve message format to Teams content type and message type.
+   * Shared by sendMessage and sendReply.
+   */
+  private formatMessage(
+    message: string,
+    format: MessageFormat = "html",
+  ): { content: string; messagetype: string } {
+    switch (format) {
+      case "markdown":
+        return { content: message, messagetype: "Text" };
+      case "html":
+      default:
+        return { content: message, messagetype: "RichText/Html" };
+    }
+  }
+
+  /**
    * Send a message to a conversation
-   * @param conversationId - The conversation ID
-   * @param message - The message content
-   * @param format - Message format: 'text' (default, converts newlines), 'html' (raw HTML), 'markdown'
    */
   async sendMessage(
     conversationId: string,
     message: string,
-    format: "text" | "html" | "markdown" = "text",
+    format: MessageFormat = "html",
   ): Promise<{ success: boolean; messageId?: string; arrivalTime?: number }> {
-    let content: string;
-    let messagetype: string;
-
-    switch (format) {
-      case "html":
-        // Raw HTML - pass through as-is
-        content = message;
-        messagetype = "RichText/Html";
-        break;
-      case "markdown":
-        // Markdown - Teams supports markdown natively
-        content = message;
-        messagetype = "Text";
-        break;
-      case "text":
-      default:
-        // Plain text - convert newlines to <br> for proper display
-        content = this.textToHtml(message);
-        messagetype = "RichText/Html";
-        break;
-    }
+    const { content, messagetype } = this.formatMessage(message, format);
 
     const result = await this.apiRequest<any>(
       `/conversations/${encodeURIComponent(conversationId)}/messages`,
@@ -693,24 +689,6 @@ export class TeamsApiClient {
   }
 
   /**
-   * Convert plain text to HTML for Teams messages
-   * - Escapes HTML special characters
-   * - Converts newlines to <br> tags
-   */
-  private textToHtml(text: string): string {
-    // Escape HTML special characters
-    const escaped = text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-
-    // Convert newlines to <br> tags
-    return escaped.replace(/\n/g, "<br>");
-  }
-
-  /**
    * Send a threaded reply to a specific message
    * Uses the ;messageid= format in the conversation URL to create a proper thread reply
    */
@@ -718,7 +696,9 @@ export class TeamsApiClient {
     conversationId: string,
     parentMessageId: string,
     message: string,
+    format: MessageFormat = "html",
   ): Promise<{ success: boolean; messageId?: string; arrivalTime?: number }> {
+    const { content, messagetype } = this.formatMessage(message, format);
     // The thread conversation ID format is: {conversationId};messageid={parentMessageId}
     const threadConversationId = `${conversationId};messageid=${parentMessageId}`;
 
@@ -727,8 +707,8 @@ export class TeamsApiClient {
       {
         method: "POST",
         body: JSON.stringify({
-          content: message,
-          messagetype: "RichText/Html",
+          content,
+          messagetype,
           contenttype: "text",
         }),
       },

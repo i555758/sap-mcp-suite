@@ -7,7 +7,7 @@
 import { z } from "zod";
 import { jsonResponse, wrapToolHandler } from "mcp-utils";
 import { formatAuthError, isAuthError } from "sap-auth";
-import type { TeamsApiClient } from "../api/teams-api.js";
+import type { TeamsApiClient, MessageFormat } from "../api/teams-api.js";
 import type { TeamsHandlerContext } from "./types.js";
 
 /**
@@ -18,10 +18,10 @@ export async function handleSend(
   args: {
     conversationId: string;
     message: string;
-    format?: "text" | "html" | "markdown";
+    format?: MessageFormat;
   },
 ) {
-  const { conversationId, message, format = "text" } = args;
+  const { conversationId, message, format = "html" } = args;
 
   const result = await apiClient.sendMessage(conversationId, message, format);
   return jsonResponse(result);
@@ -36,14 +36,16 @@ export async function handleReply(
     conversationId: string;
     parentMessageId: string;
     message: string;
+    format?: MessageFormat;
   },
 ) {
-  const { conversationId, parentMessageId, message } = args;
+  const { conversationId, parentMessageId, message, format = "html" } = args;
 
   const result = await apiClient.sendReply(
     conversationId,
     parentMessageId,
     message,
+    format,
   );
   return jsonResponse(result);
 }
@@ -68,11 +70,11 @@ export function registerMessagingHandlers(context: TeamsHandlerContext): void {
       inputSchema: {
         conversationId: z.string().describe("Conversation ID (required)"),
         message: z.string().describe("Message content to send (required)"),
-        format: z.enum(["text", "html", "markdown"]).optional().describe("Message format: 'text' (default, plain text with newline support), 'html' (raw HTML for rich formatting like <b>, <i>, <ul>, etc.), 'markdown' (Teams markdown syntax)"),
+        format: z.enum(["html", "markdown"]).optional().describe("Message format: 'html' (default, rich formatting with <b>, <i>, <ul>, etc.), 'markdown' (Teams markdown syntax)"),
       },
     },
     wrapToolHandler(
-      (args: { conversationId: string; message: string; format?: "text" | "html" | "markdown" }) =>
+      (args: { conversationId: string; message: string; format?: MessageFormat }) =>
         handleSend(apiClient, args),
       errorOptions
     )
@@ -88,10 +90,11 @@ export function registerMessagingHandlers(context: TeamsHandlerContext): void {
         conversationId: z.string().describe("Channel/Conversation ID (e.g., 19:xxx@thread.tacv2) (required)"),
         parentMessageId: z.string().describe("ID of the message to reply to (required)"),
         message: z.string().describe("Message text to send as reply (required)"),
+        format: z.enum(["html", "markdown"]).optional().describe("Message format: 'html' (default, rich formatting with <b>, <i>, <ul>, etc.), 'markdown' (Teams markdown syntax)"),
       },
     },
     wrapToolHandler(
-      (args: { conversationId: string; parentMessageId: string; message: string }) =>
+      (args: { conversationId: string; parentMessageId: string; message: string; format?: MessageFormat }) =>
         handleReply(apiClient, args),
       errorOptions
     )
