@@ -45,7 +45,18 @@ If any are missing, run the monorepo build:
 npm run install:all && npm run build:all
 ```
 
-Verify build succeeded by checking all dist folders exist.
+Verify all dist files exist:
+
+```bash
+ls packages/servers/sap-auth-mcp/dist/index.js \
+   packages/servers/sap-jira-mcp/dist/index.js \
+   packages/servers/sap-msteams-mcp/dist/index.js \
+   packages/servers/sap-wiki-mcp/dist/index.js \
+   packages/servers/mcp-github/dist/index.js \
+   packages/servers/playwright-mcp/packages/playwright-mcp/cli.js
+```
+
+All six must be present before proceeding.
 
 ---
 
@@ -262,3 +273,4 @@ You can now use these tools from any directory in Claude Code.
 
 ============================================================
 ```
+
