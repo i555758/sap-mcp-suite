@@ -129,6 +129,61 @@ export class GraphApiClient {
     }));
   }
 
+  /**
+   * Search the organization directory using /users?$search=
+   * Unlike /me/people, this finds ALL users in the org, not just known contacts.
+   * Also returns mailNickname (I-number), city, and country natively.
+   */
+  async searchDirectory(
+    query: string,
+    limit: number = 10,
+  ): Promise<GraphPerson[]> {
+    const data = await this.graphRequest<{ value: any[] }>(
+      `/users?$search="displayName:${encodeURIComponent(query)}"&$select=id,displayName,givenName,surname,mail,department,jobTitle,officeLocation,companyName,userPrincipalName,mailNickname,city,country&$count=true&$top=${limit}`,
+      {
+        headers: { ConsistencyLevel: "eventual" },
+      },
+    );
+
+    return (data.value ?? []).map((u: any) => ({
+      id: u.id,
+      displayName: u.displayName,
+      givenName: u.givenName,
+      surname: u.surname,
+      emailAddresses: u.mail ? [{ address: u.mail }] : [],
+      phones: [],
+      department: u.department,
+      jobTitle: u.jobTitle,
+      officeLocation: u.officeLocation,
+      companyName: u.companyName,
+      userPrincipalName: u.userPrincipalName,
+      mailNickname: u.mailNickname,
+      city: u.city,
+      country: u.country,
+    }));
+  }
+
+  /**
+   * Enrich a user with additional fields not available from /me/people
+   * Returns mailNickname (I-number), city, and country
+   */
+  async enrichUser(
+    userId: string,
+  ): Promise<{ mailNickname?: string; city?: string; country?: string } | null> {
+    try {
+      const data = await this.graphRequest<any>(
+        `/users/${userId}?$select=mailNickname,city,country`,
+      );
+      return {
+        mailNickname: data.mailNickname ?? undefined,
+        city: data.city ?? undefined,
+        country: data.country ?? undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   // ==========================================================================
   // Calendar Methods
   // ==========================================================================

@@ -18,6 +18,9 @@ export interface GraphPerson {
   officeLocation?: string;
   companyName?: string;
   userPrincipalName?: string;
+  mailNickname?: string;
+  city?: string;
+  country?: string;
 }
 
 export interface GraphCalendarEvent {

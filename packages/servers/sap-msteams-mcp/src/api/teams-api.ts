@@ -661,6 +661,80 @@ export class TeamsApiClient {
   }
 
   /**
+   * Create a new chat.
+   * - 1 member: 1:1 chat (construct conversation ID directly)
+   * - 2+ members: group chat (POST to /threads endpoint)
+   *
+   * memberOrgIds should NOT include the current user — they are added automatically.
+   */
+  async createChat(
+    memberOrgIds: string[],
+    topic?: string,
+  ): Promise<{ conversationId: string; type: "oneOnOne" | "group" }> {
+    const myUserId = await this.getMyUserId();
+    if (!myUserId) {
+      throw new Error("Could not determine current user ID");
+    }
+
+    // 1:1 chat — just construct the conversation ID
+    if (memberOrgIds.length === 1) {
+      const conversationId = constructPrivateChatId(myUserId, memberOrgIds[0]);
+      return { conversationId, type: "oneOnOne" };
+    }
+
+    // Group chat — POST to /threads endpoint
+    const region = this.authManager.getRegion();
+    const token = await this.authManager.getToken();
+    const threadsUrl = `https://teams.cloud.microsoft/api/chatsvc/${region}/v1/threads`;
+
+    const allMemberIds = [myUserId, ...memberOrgIds];
+    const members = allMemberIds.map((id, i) => ({
+      id: `8:orgid:${id}`,
+      role: i === 0 ? "Admin" : "User",
+    }));
+
+    const properties: Record<string, string> = {
+      threadType: "chat",
+    };
+    if (topic) {
+      properties.topic = topic;
+    }
+
+    const response = await fetch(threadsUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ members, properties }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Create group chat failed ${response.status}: ${text}`);
+    }
+
+    // Extract conversation ID from Location header or response body
+    const location = response.headers.get("Location");
+    const data: any = await response.json().catch(() => null);
+    const conversationId =
+      location?.split("/threads/")[1]?.split("?")[0] ||
+      data?.id;
+
+    if (!conversationId) {
+      throw new Error(
+        "Could not extract conversation ID from response. " +
+        `Location: ${location}, Body: ${JSON.stringify(data)}`,
+      );
+    }
+
+    return {
+      conversationId: decodeURIComponent(conversationId),
+      type: "group",
+    };
+  }
+
+  /**
    * Send a message to a conversation
    */
   async sendMessage(

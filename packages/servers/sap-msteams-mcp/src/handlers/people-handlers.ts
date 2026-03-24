@@ -18,15 +18,42 @@ export async function handleSearchPeople(
   args: {
     query: string;
     limit?: number;
+    enrich?: boolean;
   },
 ) {
-  const { query, limit = 10 } = args;
+  const { query, limit = 10, enrich = false } = args;
 
-  const people = await graphClient.searchPeople(query, limit);
+  let people = await graphClient.searchPeople(query, limit);
+  let source: "people" | "directory" = "people";
+
+  // Fallback to org directory if /me/people returned nothing
+  if (people.length === 0) {
+    people = await graphClient.searchDirectory(query, limit);
+    source = "directory";
+  }
+
+  // Only enrich if requested AND we used /me/people (directory already has these fields)
+  if (enrich && source === "people") {
+    const guidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+
+    await Promise.all(
+      people.map(async (person) => {
+        if (!guidPattern.test(person.id)) return;
+        const extra = await graphClient.enrichUser(person.id);
+        if (extra) {
+          person.mailNickname = extra.mailNickname;
+          person.city = extra.city;
+          person.country = extra.country;
+        }
+      }),
+    );
+  }
+
   return jsonResponse({
     people,
     count: people.length,
     query,
+    source,
   });
 }
 
@@ -87,10 +114,11 @@ export function registerPeopleHandlers(context: TeamsHandlerContext): void {
       inputSchema: {
         query: z.string().describe("Search query - name or email (required)"),
         limit: z.number().optional().describe("Max results (default: 10)"),
+        enrich: z.boolean().optional().describe("When true, fetches additional info (I-number, city, country) for each result. Slower due to extra API calls."),
       },
     },
     wrapToolHandler(
-      (args: { query: string; limit?: number }) =>
+      (args: { query: string; limit?: number; enrich?: boolean }) =>
         handleSearchPeople(graphClient, args),
       errorOptions
     )

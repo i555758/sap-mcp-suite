@@ -1,7 +1,7 @@
 /**
  * Messaging handlers for Teams MCP
  *
- * Handles: teams_web_send, teams_web_reply
+ * Handles: teams_web_send, teams_web_reply, teams_web_create_chat
  */
 
 import { z } from "zod";
@@ -51,6 +51,21 @@ export async function handleReply(
 }
 
 /**
+ * Handle teams_web_create_chat
+ */
+export async function handleCreateChat(
+  apiClient: TeamsApiClient,
+  args: {
+    members: string[];
+    topic?: string;
+  },
+) {
+  const { members, topic } = args;
+  const result = await apiClient.createChat(members, topic);
+  return jsonResponse(result);
+}
+
+/**
  * Register all messaging-related tools
  */
 export function registerMessagingHandlers(context: TeamsHandlerContext): void {
@@ -96,6 +111,24 @@ export function registerMessagingHandlers(context: TeamsHandlerContext): void {
     wrapToolHandler(
       (args: { conversationId: string; parentMessageId: string; message: string; format?: MessageFormat }) =>
         handleReply(apiClient, args),
+      errorOptions
+    )
+  );
+
+  // teams_web_create_chat tool
+  server.registerTool(
+    "teams_web_create_chat",
+    {
+      title: "Teams Web Create Chat",
+      description: "Create a new Teams chat. Pass one member ID for a 1:1 chat, or multiple for a group chat. Use teams_web_search_people first to resolve names to IDs. Returns the conversation ID for use with teams_web_send.",
+      inputSchema: {
+        members: z.array(z.string()).min(1).describe("User IDs (GUIDs) of people to chat with. Get IDs from teams_web_search_people. 1 = 1:1 chat, 2+ = group chat."),
+        topic: z.string().optional().describe("Optional group chat name/topic (only for group chats with 2+ members)"),
+      },
+    },
+    wrapToolHandler(
+      (args: { members: string[]; topic?: string }) =>
+        handleCreateChat(apiClient, args),
       errorOptions
     )
   );

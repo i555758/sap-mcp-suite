@@ -138,6 +138,9 @@ export class Storage {
    * Set auth data for a specific provider
    */
   async set(providerId: string, auth: StoredAuth): Promise<void> {
+    // Invalidate cache before writes to get fresh state from disk,
+    // reducing the window for cross-process overwrites
+    this.invalidateCache();
     const storage = await this.load();
     storage.providers[providerId] = {
       ...auth,
@@ -150,6 +153,7 @@ export class Storage {
    * Delete auth data for a specific provider
    */
   async delete(providerId: string): Promise<void> {
+    this.invalidateCache();
     const storage = await this.load();
     delete storage.providers[providerId];
     await this.save(storage);

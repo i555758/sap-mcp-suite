@@ -14,7 +14,7 @@ export {
 } from "./conversation-handlers.js";
 
 // Messaging handlers
-export { handleSend, handleReply, registerMessagingHandlers } from "./messaging-handlers.js";
+export { handleSend, handleReply, handleCreateChat, registerMessagingHandlers } from "./messaging-handlers.js";
 
 // Meeting handlers
 export { handleMeetingRecordings, handleTranscript, registerMeetingHandlers } from "./meeting-handlers.js";

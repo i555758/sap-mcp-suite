@@ -235,9 +235,33 @@ export class AuthManager {
 
   /**
    * Force re-authentication for a provider
-   * Clears stored auth and triggers fresh authentication
+   * Clears stored auth and triggers fresh authentication.
+   *
+   * For providers whose default method can't produce an accepted credential
+   * type (e.g., GitHub: default is SSO → cookies, but only api-token/bearer
+   * accepted), we throw immediately without deleting the stored PAT —
+   * otherwise the PAT is lost with no way to auto-replace it.
    */
   async forceReauth(providerId: string): Promise<Credentials> {
+    const config = this.requireConfig(providerId);
+    const typeMap: Record<AuthMethodType, CredentialType> = {
+      'sap-sso': 'cookie',
+      'oauth': 'bearer',
+      'api-token': 'api-token',
+    };
+    const defaultCredType = typeMap[config.method];
+    if (
+      defaultCredType &&
+      config.acceptedCredentialTypes &&
+      !config.acceptedCredentialTypes.includes(defaultCredType)
+    ) {
+      throw new ApiTokenRequiredError(
+        providerId,
+        config.setupInstructions ||
+          `Please provide an API token for ${config.name}`,
+      );
+    }
+
     await this.storage.delete(providerId);
     return await this.getCredentials(providerId);
   }
