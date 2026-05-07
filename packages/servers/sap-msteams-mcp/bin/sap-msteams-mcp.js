@@ -39,8 +39,8 @@ Environment Variables:
   VERBOSE              Enable verbose logging: true/false (default: false)
 
 For more information:
-  GitHub: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite
-  Issues: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite/issues
+  GitHub: https://github.com/i555758/sap-mcp-suite
+  Issues: https://github.com/i555758/sap-mcp-suite/issues
 `);
 }
 

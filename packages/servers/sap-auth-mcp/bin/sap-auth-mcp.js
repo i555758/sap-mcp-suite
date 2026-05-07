@@ -38,8 +38,8 @@ Environment Variables:
   BROWSER_PATH         Custom browser executable path (optional)
 
 For more information:
-  GitHub: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite
-  Issues: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite/issues
+  GitHub: https://github.com/i555758/sap-mcp-suite
+  Issues: https://github.com/i555758/sap-mcp-suite/issues
 `);
 }
 

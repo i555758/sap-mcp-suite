@@ -37,8 +37,8 @@ Environment Variables:
   AUTH_COOKIE_DIR      Directory to store authentication cookies
 
 For more information:
-  GitHub: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite
-  Issues: https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite/issues
+  GitHub: https://github.com/i555758/sap-mcp-suite
+  Issues: https://github.com/i555758/sap-mcp-suite/issues
 `);
 }
 

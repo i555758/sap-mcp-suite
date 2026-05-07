@@ -7,7 +7,7 @@ Monorepo containing MCP (Model Context Protocol) servers for SAP enterprise serv
 Clone the repository and open Claude Code in the folder:
 
 ```bash
-git clone https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite.git
+git clone https://github.com/i555758/sap-mcp-suite.git
 cd sap-mcp-suite
 claude
 ```

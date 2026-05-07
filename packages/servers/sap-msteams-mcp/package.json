@@ -28,13 +28,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite.git",
+    "url": "git+https://github.com/i555758/sap-mcp-suite.git",
     "directory": "packages/servers/sap-msteams-mcp"
   },
   "bugs": {
-    "url": "https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite/issues"
+    "url": "https://github.com/i555758/sap-mcp-suite/issues"
   },
-  "homepage": "https://github.wdf.sap.corp/D-A-Catalog-BR/sap-mcp-suite#readme",
+  "homepage": "https://github.com/i555758/sap-mcp-suite#readme",
   "author": "",
   "license": "MIT",
   "dependencies": {
